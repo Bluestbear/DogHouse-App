@@ -9,8 +9,50 @@ import {
   onDocumentUpdated,
 } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onCall, HttpsError, CallableRequest } from "firebase-functions/v2/https";
 
 const REGION = "europe-west1";
+
+// ── Economy constants (mirror the Swift client) ──
+const MAX_GRACE_CHARGES = 3;
+const GRACE_RECHARGE_HOURS = 24;
+const IMMUNITY_SECONDS = 3600;
+const REDEMPTION_TREATS = 15;
+
+// Cosmetic prices, keyed by item id — mirrors CosmeticItem.catalog in Swift.
+// The server validates cost against this so clients can't spoof prices.
+const COSMETIC_PRICES: Record<string, number> = {
+  necklace_red: 50, necklace_blue: 50, necklace_green: 50, necklace_purple: 75,
+  necklace_pink: 75, necklace_gold: 120, necklace_rainbow: 200,
+  necklace_bone: 60, necklace_heart: 90, necklace_diamond: 300,
+  hat_party: 80, hat_crown: 250, hat_cowboy: 100, hat_chef: 100,
+  hat_wizard: 180, hat_beanie: 70, hat_halo: 220,
+  glasses_cool: 80, glasses_heart: 100, glasses_star: 120,
+  glasses_round: 90, glasses_ski: 110,
+  bandana_red: 60, bandana_blue: 60, bandana_camo: 130,
+};
+
+function categoryOf(itemId: string): string {
+  return itemId.split("_")[0]; // "necklace_gold" -> "necklace"
+}
+
+/** Effective grace = stored + 1 per 24h since lastGraceRecharge, capped. */
+function effectiveGraceCharges(stored: number, lastRecharge?: Timestamp): number {
+  if (!lastRecharge) return stored;
+  const hours = (Date.now() - lastRecharge.toMillis()) / 3_600_000;
+  const recharged = Math.floor(hours / GRACE_RECHARGE_HOURS);
+  return Math.min(stored + recharged, MAX_GRACE_CHARGES);
+}
+
+function requireAuth(req: CallableRequest): string {
+  const uid = req.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "You must be signed in.");
+  return uid;
+}
+
+function coupleKeyOf(a: string, b: string): string {
+  return [a, b].sort().join("_");
+}
 
 // Initialize at module scope and pass the app handle explicitly to each
 // service. Relying on default-app lookup (getFirestore() with no args)
@@ -143,16 +185,12 @@ export const onDoghouseEvent = onDocumentWritten(
           { data: { type: "doghouse" } }
         );
       } else if (after.releasedBy === "redemption") {
-        // Redemption confirmed — reward the dog with treats (server-side;
-        // clients can only write their own user document)
-        const treatReward = 15;
-        await db.collection("users").doc(receiverId).update({
-          treats: FieldValue.increment(treatReward),
-        });
+        // The releasePartner callable already granted the treat reward +
+        // immunity atomically; here we only notify.
         await notifyUser(
           receiverId,
           "🦴 Redemption complete!",
-          `${senderName} confirmed you made it up. You're free + ${treatReward} treats! 🎉`,
+          `${senderName} confirmed you made it up. You're free + ${REDEMPTION_TREATS} treats! 🎉`,
           { data: { type: "doghouse" } }
         );
       } else {
@@ -474,6 +512,10 @@ export const resolveExpiredVotes = onSchedule(
           });
           overruledSenderIds.push(ev.data().senderId as string);
         }
+        // Grant the freed dog immunity (clients can no longer self-write it)
+        await db.collection("users").doc(winnerId).update({
+          immunityUntil: Timestamp.fromMillis(now.toMillis() + IMMUNITY_SECONDS * 1000),
+        });
         const posts = await db
           .collection("feedPosts")
           .where("voteEventId", "==", voteDoc.id)
@@ -745,3 +787,258 @@ export const dailyAnniversaryCheck = onSchedule(
     }
   }
 );
+
+// ═════════════════════════════════════════════════════════════
+// CALLABLE FUNCTIONS — the only path allowed to touch protected
+// economy fields (treats, graceCharges, immunityUntil, wishCards,
+// ownedItemIds). Security rules make those read-only to clients.
+// ═════════════════════════════════════════════════════════════
+
+/** Union of all uids in the caller's own couple + friended couples. */
+async function audienceForCouple(uid: string, partnerId: string): Promise<string[]> {
+  const key = coupleKeyOf(uid, partnerId);
+  const ids = new Set<string>([uid, partnerId]);
+  const friends = await db
+    .collection("coupleFriendships")
+    .where("coupleKeys", "array-contains", key)
+    .get();
+  friends.forEach((d) => (d.data().memberIds ?? []).forEach((m: string) => ids.add(m)));
+  return [...ids];
+}
+
+// Send partner to the doghouse — validates immunity + grace server-side.
+export const sendToDoghouse = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const reason: string = (req.data?.reason ?? "").toString().slice(0, 500);
+  const suggestion: string | null = req.data?.suggestion
+    ? req.data.suggestion.toString().slice(0, 500) : null;
+  const isPublic = req.data?.isPublic === true;
+  if (!reason) throw new HttpsError("invalid-argument", "A reason is required.");
+
+  const meRef = db.collection("users").doc(uid);
+  const meSnap = await meRef.get();
+  const me = meSnap.data();
+  const partnerId: string | undefined = me?.partnerId;
+  if (!partnerId || partnerId === "skipped") {
+    throw new HttpsError("failed-precondition", "You have no partner.");
+  }
+
+  const partnerSnap = await db.collection("users").doc(partnerId).get();
+  const partner = partnerSnap.data() ?? {};
+  const immunity = partner.immunityUntil as Timestamp | undefined;
+  if (immunity && immunity.toMillis() > Date.now()) {
+    throw new HttpsError("failed-precondition",
+      "Your partner has immunity! They can't be sent yet.");
+  }
+
+  const stored = (me?.graceCharges as number | undefined) ?? MAX_GRACE_CHARGES;
+  const effective = effectiveGraceCharges(stored, me?.lastGraceRecharge as Timestamp | undefined);
+  if (effective <= 0) {
+    throw new HttpsError("resource-exhausted",
+      "You're out of grace! Wait for it to recharge (1 per day).");
+  }
+
+  const now = Timestamp.now();
+  const key = coupleKeyOf(uid, partnerId);
+  const eventRef = db.collection("doghouseEvents").doc();
+  const batch = db.batch();
+  batch.set(eventRef, {
+    senderId: uid, receiverId: partnerId, reason, suggestion,
+    startedAt: now, endedAt: null, isActive: true, coupleKey: key,
+  });
+  batch.update(meRef, {
+    graceCharges: effective - 1,
+    lastGraceRecharge: now,
+  });
+
+  if (isPublic) {
+    const audience = await audienceForCouple(uid, partnerId);
+    const postRef = db.collection("feedPosts").doc();
+    batch.set(postRef, {
+      eventId: eventRef.id, senderId: uid, receiverId: partnerId,
+      senderName: me?.displayName ?? "Someone",
+      receiverName: partner.displayName ?? "their partner",
+      senderAvatarId: me?.avatarId ?? "dog_1",
+      receiverAvatarId: partner.avatarId ?? "dog_1",
+      reason, createdAt: now, status: "active", audienceIds: audience,
+      reactions: {}, coupleKey: key,
+    });
+  }
+  await batch.commit();
+  return { ok: true, graceRemaining: effective - 1 };
+});
+
+// Release partner (or confirm redemption) — grants immunity + reward server-side.
+export const releasePartner = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const eventId: string = req.data?.eventId;
+  const byRedemption = req.data?.byRedemption === true;
+  if (!eventId) throw new HttpsError("invalid-argument", "Missing eventId.");
+
+  const ref = db.collection("doghouseEvents").doc(eventId);
+  const snap = await ref.get();
+  const ev = snap.data();
+  if (!ev || ev.senderId !== uid) {
+    throw new HttpsError("permission-denied", "Only the sender can release.");
+  }
+  if (ev.isActive !== true) return { ok: true };
+
+  const now = Timestamp.now();
+  const receiverId: string = ev.receiverId;
+  const batch = db.batch();
+  batch.update(ref, {
+    isActive: false, endedAt: now,
+    releasedBy: byRedemption ? "redemption" : "sender",
+  });
+  // Grant the released dog immunity (was previously a client self-write)
+  batch.update(db.collection("users").doc(receiverId), {
+    immunityUntil: Timestamp.fromMillis(now.toMillis() + IMMUNITY_SECONDS * 1000),
+    ...(byRedemption ? { treats: FieldValue.increment(REDEMPTION_TREATS) } : {}),
+  });
+  await batch.commit();
+
+  // Close any public feed post for this sending
+  const posts = await db.collection("feedPosts")
+    .where("eventId", "==", eventId).where("status", "==", "active").get();
+  await Promise.all(posts.docs.map((p) =>
+    p.ref.update({ status: "released", endedAt: now })));
+  return { ok: true };
+});
+
+// Request redemption — the dog flags they made it up (only their own event).
+export const requestRedemption = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const eventId: string = req.data?.eventId;
+  if (!eventId) throw new HttpsError("invalid-argument", "Missing eventId.");
+  const ref = db.collection("doghouseEvents").doc(eventId);
+  const ev = (await ref.get()).data();
+  if (!ev || ev.receiverId !== uid || ev.isActive !== true) {
+    throw new HttpsError("permission-denied", "Not your active doghouse event.");
+  }
+  await ref.update({ redemptionRequested: true });
+  return { ok: true };
+});
+
+// Purchase a cosmetic — for self or as a gift to the partner.
+export const purchaseCosmetic = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const itemId: string = req.data?.itemId;
+  const forPartner = req.data?.forPartner === true;
+  const price = COSMETIC_PRICES[itemId];
+  if (price === undefined) throw new HttpsError("invalid-argument", "Unknown item.");
+
+  const meRef = db.collection("users").doc(uid);
+  const me = (await meRef.get()).data() ?? {};
+  const treats = (me.treats as number | undefined) ?? 100;
+  if (treats < price) {
+    throw new HttpsError("failed-precondition", "Not enough treats! Keep playing 🦴");
+  }
+
+  let targetId = uid;
+  if (forPartner) {
+    const partnerId = me.partnerId as string | undefined;
+    if (!partnerId || partnerId === "skipped") {
+      throw new HttpsError("failed-precondition", "You have no partner to gift to.");
+    }
+    targetId = partnerId;
+  }
+
+  const batch = db.batch();
+  batch.update(meRef, { treats: FieldValue.increment(-price) });
+  batch.update(db.collection("users").doc(targetId), {
+    ownedItemIds: FieldValue.arrayUnion(itemId),
+  });
+  await batch.commit();
+
+  if (forPartner) {
+    await notifyUser(targetId, "🎁 A gift!",
+      `${me.displayName ?? "Your partner"} bought you something for your dog. Go check the shop!`,
+      { data: { type: "shop" } });
+  }
+  return { ok: true, treatsRemaining: treats - price };
+});
+
+// Equip / unequip a cosmetic on self or partner (validates ownership).
+export const equipCosmetic = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const itemId: string | null = req.data?.itemId ?? null; // null = unequip
+  const category: string = req.data?.category;
+  const forPartner = req.data?.forPartner === true;
+  if (!category) throw new HttpsError("invalid-argument", "Missing category.");
+
+  const me = (await db.collection("users").doc(uid).get()).data() ?? {};
+  let targetId = uid;
+  if (forPartner) {
+    const partnerId = me.partnerId as string | undefined;
+    if (!partnerId || partnerId === "skipped") {
+      throw new HttpsError("failed-precondition", "You have no partner.");
+    }
+    targetId = partnerId;
+  }
+
+  const targetRef = db.collection("users").doc(targetId);
+  if (itemId) {
+    if (categoryOf(itemId) !== category) {
+      throw new HttpsError("invalid-argument", "Item/category mismatch.");
+    }
+    const owned: string[] = (await targetRef.get()).data()?.ownedItemIds ?? [];
+    if (!owned.includes(itemId)) {
+      throw new HttpsError("failed-precondition", "That dog doesn't own this item.");
+    }
+    await targetRef.update({ [`equippedItemIds.${category}`]: itemId });
+  } else {
+    await targetRef.update({ [`equippedItemIds.${category}`]: FieldValue.delete() });
+  }
+  return { ok: true };
+});
+
+// Award treats for time spent at home — server computes from event history.
+export const claimHomeTreats = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const meRef = db.collection("users").doc(uid);
+  const me = (await meRef.get()).data() ?? {};
+
+  // Guard: no award while currently in the doghouse
+  const active = await db.collection("doghouseEvents")
+    .where("receiverId", "==", uid).where("isActive", "==", true).limit(1).get();
+  if (!active.empty) return { ok: true, awarded: 0 };
+
+  const last = me.lastTreatAward as Timestamp | undefined;
+  const sinceMs = last ? last.toMillis() : Date.now() - 3_600_000;
+  const hours = Math.floor((Date.now() - sinceMs) / 3_600_000);
+  if (hours < 1) return { ok: true, awarded: 0 };
+
+  // Rate scales with room level (time since last release), matching the client.
+  const rate = Math.max(1, Math.min(5, Number(req.data?.treatsPerHour ?? 1)));
+  const amount = hours * rate;
+  await meRef.update({
+    treats: FieldValue.increment(amount),
+    lastTreatAward: Timestamp.now(),
+  });
+  return { ok: true, awarded: amount };
+});
+
+// Redeem a "Whatever I Want" card — server checks and decrements the balance.
+export const redeemWishCard = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const text: string = (req.data?.text ?? "").toString().slice(0, 300);
+  if (!text) throw new HttpsError("invalid-argument", "Say what you want!");
+
+  const meRef = db.collection("users").doc(uid);
+  const me = (await meRef.get()).data() ?? {};
+  const cards = (me.wishCards as number | undefined) ?? 0;
+  const partnerId = me.partnerId as string | undefined;
+  if (cards <= 0) throw new HttpsError("failed-precondition", "You have no cards to redeem.");
+  if (!partnerId || partnerId === "skipped") {
+    throw new HttpsError("failed-precondition", "You have no partner.");
+  }
+
+  const batch = db.batch();
+  batch.set(db.collection("wishes").doc(), {
+    fromUserId: uid, toUserId: partnerId,
+    fromName: me.displayName ?? "Your partner", text, createdAt: Timestamp.now(),
+  });
+  batch.update(meRef, { wishCards: FieldValue.increment(-1) });
+  await batch.commit();
+  return { ok: true, cardsRemaining: cards - 1 };
+});

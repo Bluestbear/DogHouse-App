@@ -11,6 +11,7 @@
 		520665202F6F511800C321C8 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 5206651F2F6F511800C321C8 /* FirebaseFirestore */; };
 		520665222F6F511800C321C8 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 520665212F6F511800C321C8 /* FirebaseMessaging */; };
 		52066A0E2F70000000C321C8 /* DogHouseWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 52066A012F70000000C321C8 /* DogHouseWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		52066B012F71000000C321C8 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 52066B002F71000000C321C8 /* FirebaseFunctions */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -112,6 +113,7 @@
 				520665222F6F511800C321C8 /* FirebaseMessaging in Frameworks */,
 				5206651E2F6F511800C321C8 /* FirebaseAuth in Frameworks */,
 				520665202F6F511800C321C8 /* FirebaseFirestore in Frameworks */,
+				52066B012F71000000C321C8 /* FirebaseFunctions in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -186,6 +188,7 @@
 				5206651D2F6F511800C321C8 /* FirebaseAuth */,
 				5206651F2F6F511800C321C8 /* FirebaseFirestore */,
 				520665212F6F511800C321C8 /* FirebaseMessaging */,
+				52066B002F71000000C321C8 /* FirebaseFunctions */,
 			);
 			productName = DogHouse;
 			productReference = 520664792F6EF32C00C321C8 /* DogHouse.app */;
@@ -784,6 +787,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5206651C2F6F511800C321C8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseMessaging;
+		};
+		52066B002F71000000C321C8 /* FirebaseFunctions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5206651C2F6F511800C321C8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFunctions;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

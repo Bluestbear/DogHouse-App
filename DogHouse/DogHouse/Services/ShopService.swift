@@ -11,71 +11,51 @@ import FirebaseAuth
 import FirebaseFirestore
 
 class ShopService {
-    private let fs = FirebaseService.shared
+    private let cf = CloudFunctions.shared
 
-    private var userId: String? { Auth.auth().currentUser?.uid }
+    // MARK: - Purchase (self or gift to partner)
 
-    // MARK: - Purchase
-
-    func purchase(_ item: CosmeticItem, currentTreats: Int) async throws {
-        guard let uid = userId else { return }
-        guard currentTreats >= item.price else {
-            throw ShopError.insufficientTreats
-        }
-        let userRef = fs.usersCollection.document(uid)
-        let batch = fs.db.batch()
-        batch.updateData([
-            "treats": FieldValue.increment(Int64(-item.price)),
-            "ownedItemIds": FieldValue.arrayUnion([item.id])
-        ], forDocument: userRef)
-        try await batch.commit()
+    /// Buy a cosmetic. `forPartner` gifts it into the partner's wardrobe.
+    /// Treats are validated and deducted server-side.
+    func purchase(_ item: CosmeticItem, forPartner: Bool = false) async throws {
+        try await cf.call("purchaseCosmetic", [
+            "itemId": item.id,
+            "forPartner": forPartner
+        ])
     }
 
-    // MARK: - Equip / Unequip on self
+    // MARK: - Equip / Unequip (self or partner)
 
     func equipOnSelf(_ item: CosmeticItem) async throws {
-        guard let uid = userId else { return }
-        try await fs.usersCollection.document(uid).updateData([
-            "equippedItemIds.\(item.category.rawValue)": item.id
+        try await cf.call("equipCosmetic", [
+            "itemId": item.id, "category": item.category.rawValue, "forPartner": false
         ])
     }
 
     func unequipOnSelf(category: CosmeticCategory) async throws {
-        guard let uid = userId else { return }
-        try await fs.usersCollection.document(uid).updateData([
-            "equippedItemIds.\(category.rawValue)": FieldValue.delete()
-        ])
-    }
-
-    // MARK: - Equip / Unequip on partner
-
-    // MARK: - Treat Earning
-
-    /// Awards 10 treats for each complete hour spent at home since lastTreatAward.
-    /// Idempotent: only runs if at least one hour has elapsed.
-    func awardHomeTreats(lastAward: Date?, treatsPerHour: Int) async throws {
-        guard let uid = userId else { return }
-        let now = Date()
-        let since = lastAward ?? now.addingTimeInterval(-3600) // first time: award 1 hour
-        let hoursElapsed = Int(now.timeIntervalSince(since) / 3600)
-        guard hoursElapsed >= 1 else { return }
-        let amount = hoursElapsed * treatsPerHour
-        try await fs.usersCollection.document(uid).updateData([
-            "treats": FieldValue.increment(Int64(amount)),
-            "lastTreatAward": Timestamp(date: now)
+        try await cf.call("equipCosmetic", [
+            "itemId": NSNull(), "category": category.rawValue, "forPartner": false
         ])
     }
 
     func equipOnPartner(_ item: CosmeticItem, partnerId: String) async throws {
-        try await fs.usersCollection.document(partnerId).updateData([
-            "equippedItemIds.\(item.category.rawValue)": item.id
+        try await cf.call("equipCosmetic", [
+            "itemId": item.id, "category": item.category.rawValue, "forPartner": true
         ])
     }
 
     func unequipOnPartner(category: CosmeticCategory, partnerId: String) async throws {
-        try await fs.usersCollection.document(partnerId).updateData([
-            "equippedItemIds.\(category.rawValue)": FieldValue.delete()
+        try await cf.call("equipCosmetic", [
+            "itemId": NSNull(), "category": category.rawValue, "forPartner": true
         ])
+    }
+
+    // MARK: - Treat Earning
+
+    /// Claim treats for time spent at home. The server computes the amount
+    /// from event history; the client only passes the level-based rate.
+    func awardHomeTreats(lastAward: Date?, treatsPerHour: Int) async throws {
+        try await cf.call("claimHomeTreats", ["treatsPerHour": treatsPerHour])
     }
 }
 

@@ -105,15 +105,12 @@ class DoghouseService: ObservableObject {
                 guard let self else { return }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    let wasInDoghouse = self.myDoghouseEvent != nil
                     if let doc = snapshot?.documents.first {
                         self.myDoghouseEvent = try? self.fs.decode(DoghouseEvent.self, from: doc)
                     } else {
+                        // Immunity on release is now granted server-side by the
+                        // releasePartner callable / vote resolver.
                         self.myDoghouseEvent = nil
-                        // I was just released — write immunity to my own document
-                        if wasInDoghouse {
-                            await self.grantSelfImmunity()
-                        }
                     }
                 }
             }
@@ -198,129 +195,33 @@ class DoghouseService: ObservableObject {
 
     // MARK: - Core Actions
 
-    /// Send partner to the doghouse. Current user becomes the sender; partner becomes the receiver.
-    /// Costs 1 grace charge. When `isPublic` is true, a feed post is created
-    /// so the sender's friends can see and react to the sending.
+    /// Send partner to the doghouse via the server (grace/immunity are
+    /// validated and deducted server-side; public sends create the feed post).
     func sendToDoghouse(reason: String, suggestion: String?, isPublic: Bool = false) async throws {
         guard let partnerId, partnerId != "skipped" else { return }
-
-        // Check if partner has immunity
-        let partnerDoc = try await fs.usersCollection.document(partnerId).getDocument()
-        if let immunityTimestamp = partnerDoc.data()?["immunityUntil"] as? Timestamp,
-           immunityTimestamp.dateValue() > Date() {
-            throw NSError(domain: "DoghouseService", code: -10,
-                          userInfo: [NSLocalizedDescriptionKey: "Your partner has immunity! They can't be sent to the doghouse yet."])
-        }
-
-        // Check grace charges
-        let myDoc = try await fs.usersCollection.document(userId).getDocument()
-        let storedCharges = myDoc.data()?["graceCharges"] as? Int ?? UserProfile.maxGraceCharges
-        let lastRecharge = (myDoc.data()?["lastGraceRecharge"] as? Timestamp)?.dateValue()
-        let effective = Self.computeEffectiveCharges(stored: storedCharges, lastRecharge: lastRecharge)
-
-        guard effective > 0 else {
-            throw NSError(domain: "DoghouseService", code: -11,
-                          userInfo: [NSLocalizedDescriptionKey: "You're out of grace! Wait for charges to recharge (1 per day)."])
-        }
-
-        let docRef = fs.doghouseEventsCollection.document()
-        let key = fs.coupleKey(userId1: userId, userId2: partnerId)
-
-        let event = DoghouseEvent(
-            id: docRef.documentID,
-            senderId: userId,
-            receiverId: partnerId,
-            reason: reason,
-            suggestion: suggestion,
-            startedAt: Date(),
-            endedAt: nil,
-            isActive: true
-        )
-
-        var data = try fs.encoder.encode(event)
-        data["coupleKey"] = key
-
-        // Deduct 1 grace charge and reset recharge timer
-        let newCharges = effective - 1
-        let now = Date()
-
-        let batch = fs.db.batch()
-        batch.setData(data, forDocument: docRef)
-        batch.updateData([
-            "graceCharges": newCharges,
-            "lastGraceRecharge": Timestamp(date: now)
-        ], forDocument: fs.usersCollection.document(userId))
-
-        if isPublic {
-            let myData = myDoc.data() ?? [:]
-            let partnerData = partnerDoc.data() ?? [:]
-            let friendIds = myData["friendIds"] as? [String] ?? []
-            let audience = Array(Set(friendIds + [userId, partnerId]))
-
-            let postRef = fs.feedPostsCollection.document()
-            batch.setData([
-                "eventId": docRef.documentID,
-                "senderId": userId,
-                "receiverId": partnerId,
-                "senderName": myData["displayName"] as? String ?? "Someone",
-                "receiverName": partnerData["displayName"] as? String ?? "their partner",
-                "senderAvatarId": myData["avatarId"] as? String ?? "dog_1",
-                "receiverAvatarId": partnerData["avatarId"] as? String ?? "dog_1",
-                "reason": reason,
-                "createdAt": Timestamp(date: now),
-                "status": "active",
-                "audienceIds": audience,
-                "reactions": [:],
-                "coupleKey": key
-            ], forDocument: postRef)
-        }
-
-        try await batch.commit()
+        try await CloudFunctions.shared.call("sendToDoghouse", [
+            "reason": reason,
+            "suggestion": suggestion as Any,
+            "isPublic": isPublic
+        ])
         // Snapshot listeners will update both devices
     }
 
-    /// The dog marks the make-it-up suggestion as done; the sender gets
-    /// a push asking to confirm. Rules allow the receiver to set only this field.
+    /// The dog marks the make-it-up suggestion as done; the sender gets a
+    /// push asking to confirm. Server sets the flag on their active event.
     func requestRedemption() async throws {
         guard let event = myDoghouseEvent else { return }
-        try await fs.doghouseEventsCollection.document(event.id).updateData([
-            "redemptionRequested": true
-        ])
+        try await CloudFunctions.shared.call("requestRedemption", ["eventId": event.id])
     }
 
-    /// Release partner from the doghouse. Only the sender can do this.
-    /// Marks the event inactive; the receiver's listener grants them immunity on their own device.
-    /// releasedBy "redemption" additionally awards the dog treats (server-side).
+    /// Release partner from the doghouse. The server marks the event inactive,
+    /// grants the freed dog immunity, awards redemption treats, and closes any
+    /// public feed post — all atomically with admin privileges.
     func releasePartner(releasedBy: String = "sender") async throws {
         guard let event = partnerDoghouseEvent else { return }
-
-        let now = Date()
-        try await fs.doghouseEventsCollection.document(event.id).updateData([
-            "isActive": false,
-            "endedAt": Timestamp(date: now),
-            "releasedBy": releasedBy
-        ])
-        // Snapshot listeners handle the update on both devices.
-        // The receiver writes their own immunityUntil when they detect the release.
-
-        // If this sending was public, close the feed post too (non-fatal)
-        if let posts = try? await fs.feedPostsCollection
-            .whereField("eventId", isEqualTo: event.id)
-            .whereField("status", isEqualTo: "active")
-            .getDocuments() {
-            for doc in posts.documents {
-                try? await doc.reference.updateData([
-                    "status": "released",
-                    "endedAt": Timestamp(date: now)
-                ])
-            }
-        }
-    }
-
-    private func grantSelfImmunity() async {
-        let immunityEnd = Date().addingTimeInterval(3600)
-        try? await fs.usersCollection.document(userId).updateData([
-            "immunityUntil": Timestamp(date: immunityEnd)
+        try await CloudFunctions.shared.call("releasePartner", [
+            "eventId": event.id,
+            "byRedemption": releasedBy == "redemption"
         ])
     }
 

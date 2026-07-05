@@ -19,7 +19,10 @@ struct ShopTabView: View {
     private var profile: UserProfile? { authService.userProfile }
     private var partnerProfile: UserProfile? { authService.partnerProfile }
     private var treats: Int { profile?.effectiveTreats ?? 100 }
-    private var owned: Set<String> { profile?.ownedItemSet ?? [] }
+    // Inventory of whoever is being dressed (buying always spends MY treats).
+    private var owned: Set<String> {
+        (shopTarget == .me ? profile?.ownedItemSet : partnerProfile?.ownedItemSet) ?? []
+    }
 
     private var myCosmetics: AvatarCosmetics {
         AvatarCosmetics(equippedItemIds: profile?.equippedItemIds ?? [:])
@@ -219,11 +222,12 @@ struct ShopTabView: View {
                 ProgressView()
                     .frame(height: 32)
             } else if !isOwned {
-                // Buy button
+                // Buy button — gifts to partner when dressing their dog
                 Button {
-                    performAction { try await shopService.purchase(item, currentTreats: treats) }
+                    busyItemId = item.id
+                    performAction { try await shopService.purchase(item, forPartner: shopTarget == .partner) }
                 } label: {
-                    Label("\(item.price) 🦴", systemImage: "cart")
+                    Label(shopTarget == .partner ? "Gift \(item.price) 🦴" : "\(item.price) 🦴", systemImage: shopTarget == .partner ? "gift" : "cart")
                         .font(.caption.bold())
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 7)

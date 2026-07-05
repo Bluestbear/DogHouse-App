@@ -255,28 +255,10 @@ class ChallengeService: ObservableObject {
 
     // MARK: - Whatever I Want Cards
 
-    /// Redeem one card: notifies the partner with the wish text
+    /// Redeem one card. The server validates the balance, decrements
+    /// `wishCards` (a protected field), and creates the wish.
     func redeemWishCard(text: String) async throws {
-        guard let partnerId else { return }
-        let myDoc = try await fs.usersCollection.document(userId).getDocument()
-        let cards = myDoc.data()?["wishCards"] as? Int ?? 0
-        guard cards > 0 else {
-            throw NSError(domain: "ChallengeService", code: -22,
-                          userInfo: [NSLocalizedDescriptionKey: "You don't have any Whatever-I-Want cards. Win a challenge first!"])
-        }
-        let myName = myDoc.data()?["displayName"] as? String ?? "Your partner"
-
-        let batch = fs.db.batch()
-        batch.setData([
-            "fromUserId": userId,
-            "toUserId": partnerId,
-            "fromName": myName,
-            "text": text,
-            "createdAt": Timestamp(date: Date())
-        ], forDocument: fs.wishesCollection.document())
-        batch.updateData(["wishCards": FieldValue.increment(Int64(-1))],
-                         forDocument: fs.usersCollection.document(userId))
-        try await batch.commit()
+        try await CloudFunctions.shared.call("redeemWishCard", ["text": text])
     }
 
     func markWishFulfilled(_ wish: Wish) async throws {
