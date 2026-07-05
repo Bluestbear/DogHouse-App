@@ -622,3 +622,126 @@ export const onDeletionRequest = onDocumentCreated(
     }
   }
 );
+
+// ─────────────────────────────────────────────────────────────
+// 9. Challenges — quiz resolution + "Whatever I Want" card awards
+// ─────────────────────────────────────────────────────────────
+export const onChallengeWritten = onDocumentWritten(
+  { document: "challenges/{challengeId}", region: REGION },
+  async (event) => {
+    const after = event.data?.after.data();
+    if (!after) return;
+    const ref = event.data!.after.ref;
+    const participants: string[] = after.participants ?? [];
+
+    // Quiz: resolve once both partners have answered
+    if (
+      after.type === "quiz" &&
+      after.status === "active" &&
+      participants.length === 2 &&
+      participants.every((uid) => after.answers?.[uid]?.own && after.answers?.[uid]?.guess)
+    ) {
+      const [a, b] = participants;
+      const aRight = after.answers[a].guess === after.answers[b].own;
+      const bRight = after.answers[b].guess === after.answers[a].own;
+      let winnerId: string | null = null;
+      if (aRight && !bRight) winnerId = a;
+      if (bRight && !aRight) winnerId = b;
+      await ref.update({
+        status: "completed",
+        winnerId,
+        completedAt: Timestamp.now(),
+      });
+      if (!winnerId) {
+        const result = aRight
+          ? "You BOTH know each other too well. It's a tie! 🤝"
+          : "Neither of you guessed right... awkward 😅 It's a tie!";
+        await notifyUsers(participants, "🧠 Quiz over!", result, {
+          data: { type: "challenge" },
+        });
+      }
+      return; // the update above re-triggers this function for the award
+    }
+
+    // Award: any completed challenge with a winner grants one card (once)
+    if (after.status === "completed" && after.winnerId && after.cardAwarded !== true) {
+      const winnerId: string = after.winnerId;
+      const loserId = participants.find((p) => p !== winnerId);
+      await ref.update({ cardAwarded: true });
+      await db.collection("users").doc(winnerId).update({
+        wishCards: FieldValue.increment(1),
+      });
+
+      const winnerName = await displayName(winnerId);
+      const flavor: Record<string, [string, string]> = {
+        quiz: ["🧠 You know them best!", "knew you better than you knew them"],
+        photo: ["📸 Photo Dash won!", "was faster on the draw"],
+        anniversary: ["💍 Anniversary race won!", "wished it first this year"],
+      };
+      const [winTitle, loseVerb] = flavor[after.type as string] ?? ["🏆 Challenge won!", "won"];
+
+      await notifyUser(
+        winnerId,
+        winTitle,
+        "You earned a Whatever-I-Want card 🎟️ Redeem it wisely...",
+        { data: { type: "challenge" } }
+      );
+      if (loserId) {
+        await notifyUser(
+          loserId,
+          after.type === "anniversary"
+            ? `💍 ${winnerName} beat you to it!`
+            : "😬 You lost this one...",
+          `${winnerName} ${loseVerb} and now holds a Whatever-I-Want card over you.`,
+          { data: { type: "challenge" } }
+        );
+      }
+      logger.info(`[challenge] ${after.type} won by ${winnerId}, card awarded`);
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────
+// 10. Wish redeemed — deliver the "Whatever I Want" demand
+// ─────────────────────────────────────────────────────────────
+export const onWishCreated = onDocumentCreated(
+  { document: "wishes/{wishId}", region: REGION },
+  async (event) => {
+    const wish = event.data?.data();
+    if (!wish) return;
+    await notifyUser(
+      wish.toUserId,
+      `🎟️ ${wish.fromName ?? "Your partner"} redeemed their card!`,
+      `"${wish.text}" — a card's a card. No take-backs.`,
+      { data: { type: "challenge" } }
+    );
+  }
+);
+
+// ─────────────────────────────────────────────────────────────
+// 11. Anniversary morning reminder — kicks off the race
+// ─────────────────────────────────────────────────────────────
+export const dailyAnniversaryCheck = onSchedule(
+  { schedule: "every day 09:00", timeZone: "Europe/Berlin", region: REGION },
+  async () => {
+    const metas = await db.collection("coupleMeta").get();
+    const today = new Date();
+    for (const doc of metas.docs) {
+      const anniversary = (doc.data().anniversary as Timestamp | undefined)?.toDate();
+      const userIds: string[] = doc.data().userIds ?? [];
+      if (!anniversary || userIds.length !== 2) continue;
+      if (
+        anniversary.getMonth() === today.getMonth() &&
+        anniversary.getDate() === today.getDate()
+      ) {
+        await notifyUsers(
+          userIds,
+          "💍 It's your anniversary!",
+          "First one to wish a happy anniversary in the app wins a Whatever-I-Want card. GO!",
+          { data: { type: "challenge" } }
+        );
+        logger.info(`[anniversary] Race day for couple ${doc.id}`);
+      }
+    }
+  }
+);

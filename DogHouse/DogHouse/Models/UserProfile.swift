@@ -23,6 +23,7 @@ struct UserProfile: Codable, Identifiable {
     var ownedItemIds: [String]?
     var equippedItemIds: [String: String]? // CosmeticCategory.rawValue -> itemId
     var lastTreatAward: Date?
+    var wishCards: Int?
 
     /// Whether this user currently has active immunity from voting
     var hasImmunity: Bool {

@@ -12,7 +12,7 @@ struct MainTabView: View {
     @State private var showPermissionExplainer = false
 
     enum AppTab: Hashable {
-        case home, friends, shop, profile
+        case home, friends, play, shop, profile
     }
 
     var body: some View {
@@ -24,6 +24,11 @@ struct MainTabView: View {
 
             Tab("Friends", systemImage: "person.2.fill", value: AppTab.friends) {
                 FriendsTabView()
+                    .environmentObject(authService)
+            }
+
+            Tab("Play", systemImage: "gamecontroller.fill", value: AppTab.play) {
+                PlayTabView()
                     .environmentObject(authService)
             }
 
@@ -44,6 +49,7 @@ struct MainTabView: View {
             switch destination {
             case .home: selectedTab = .home
             case .friends: selectedTab = .friends
+            case .play: selectedTab = .play
             }
             notificationService.pendingDestination = nil
         }

@@ -150,6 +150,44 @@ service cloud.firestore {
         && request.auth.uid in coupleKey.split('_');
     }
 
+    // Couple metadata (anniversary date) — only the two partners whose
+    // uids form the coupleKey can access it.
+    match /coupleMeta/{coupleKey} {
+      allow read, write: if authed()
+        && request.auth.uid in coupleKey.split('_');
+    }
+
+    // Couple challenges (quiz / photo dash / anniversary race).
+    // Participants only; a completed challenge is immutable from clients
+    // (which is what makes the anniversary race first-tap-wins), and
+    // cardAwarded can only ever be set server-side.
+    match /challenges/{challengeId} {
+      allow read: if authed()
+        && request.auth.uid in resource.data.participants;
+      allow create: if authed()
+        && request.auth.uid == request.resource.data.createdBy
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.get('cardAwarded', false) == false;
+      allow update: if authed()
+        && request.auth.uid in resource.data.participants
+        && resource.data.status == 'active'
+        && request.resource.data.get('cardAwarded', false) == false;
+    }
+
+    // Redeemed "Whatever I Want" cards. Sender creates; the receiver can
+    // mark it fulfilled.
+    match /wishes/{wishId} {
+      allow read: if authed() && (
+        request.auth.uid == resource.data.fromUserId ||
+        request.auth.uid == resource.data.toUserId
+      );
+      allow create: if authed()
+        && request.auth.uid == request.resource.data.fromUserId;
+      allow update: if authed()
+        && request.auth.uid == resource.data.toUserId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fulfilled']);
+    }
+
     // Belly rubs — doc id is the receiver's uid. The receiver reads
     // (their own incoming-rub listener); only their partner can send.
     match /bellyRubs/{userId} {

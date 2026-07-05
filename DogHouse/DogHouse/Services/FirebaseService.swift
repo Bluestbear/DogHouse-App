@@ -40,6 +40,9 @@ final class FirebaseService {
     var coupleTasksCollection: CollectionReference { db.collection("coupleTasks") }
     var bellyRubsCollection: CollectionReference { db.collection("bellyRubs") }
     var feedPostsCollection: CollectionReference { db.collection("feedPosts") }
+    var challengesCollection: CollectionReference { db.collection("challenges") }
+    var coupleMetaCollection: CollectionReference { db.collection("coupleMeta") }
+    var wishesCollection: CollectionReference { db.collection("wishes") }
 
     // MARK: - Helpers
 

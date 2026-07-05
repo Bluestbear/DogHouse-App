@@ -27,6 +27,7 @@ final class NotificationService: ObservableObject {
     enum Destination: Equatable {
         case home      // doghouse status, redemption
         case friends   // feed, votes, friend requests
+        case play      // challenges, anniversary, wish cards
     }
 
     enum PushAction: Equatable {
@@ -108,6 +109,8 @@ final class NotificationService: ObservableObject {
         switch userInfo["type"] as? String {
         case "feed", "vote", "friends":
             pendingDestination = .friends
+        case "challenge":
+            pendingDestination = .play
         default:
             pendingDestination = .home
         }
