@@ -9,6 +9,7 @@ struct FriendsTabView: View {
     @EnvironmentObject var authService: AuthService
     @StateObject private var friendService = FriendService(userId: "mock_user")
     @StateObject private var voteService = VoteService(userId: "mock_user")
+    @StateObject private var feedService = FeedService(userId: "mock_user")
 
     @State private var friendCode = ""
     @State private var showCreateGroup = false
@@ -18,6 +19,20 @@ struct FriendsTabView: View {
     var body: some View {
         NavigationStack {
             List {
+                // Jailbreak votes — two friends in the doghouse at once
+                ForEach(voteService.activeJointVotes) { vote in
+                    JointVoteBanner(
+                        vote: vote,
+                        voteService: voteService,
+                        friendService: friendService
+                    )
+                }
+
+                // Friends feed — public sendings
+                if !feedService.posts.isEmpty {
+                    feedSection
+                }
+
                 // Add a Friend
                 addFriendSection
 
@@ -39,6 +54,18 @@ struct FriendsTabView: View {
             .onChange(of: friendService.groups, initial: true) { _, newGroups in
                 voteService.listenForVotes(inGroupIds: newGroups.map { $0.id })
             }
+        }
+    }
+
+    // MARK: - Feed Section
+
+    private var feedSection: some View {
+        Section {
+            ForEach(feedService.posts) { post in
+                FeedPostCard(post: post, feedService: feedService)
+            }
+        } header: {
+            Text("The Feed 📣")
         }
     }
 

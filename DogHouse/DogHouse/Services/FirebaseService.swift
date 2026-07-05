@@ -39,6 +39,7 @@ final class FirebaseService {
     var onboardingTasksCollection: CollectionReference { db.collection("onboardingTasks") }
     var coupleTasksCollection: CollectionReference { db.collection("coupleTasks") }
     var bellyRubsCollection: CollectionReference { db.collection("bellyRubs") }
+    var feedPostsCollection: CollectionReference { db.collection("feedPosts") }
 
     // MARK: - Helpers
 

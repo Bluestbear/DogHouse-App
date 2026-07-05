@@ -20,6 +20,8 @@ class FriendService: ObservableObject {
     private let fs = FirebaseService.shared
     private var pendingListener: ListenerRegistration?
     private var groupsListener: ListenerRegistration?
+    private var myProfileListener: ListenerRegistration?
+    private var lastFriendIds: [String] = []
 
     init(userId: String) {
         // Resolve real user ID from Firebase Auth when views pass "mock_user"
@@ -42,6 +44,7 @@ class FriendService: ObservableObject {
     deinit {
         pendingListener?.remove()
         groupsListener?.remove()
+        myProfileListener?.remove()
     }
 
     // MARK: - Listeners
@@ -59,6 +62,17 @@ class FriendService: ObservableObject {
                         try? self.fs.decode(Friendship.self, from: $0)
                     }
                 }
+            }
+
+        // Listen to my own profile so the friends list refreshes when the
+        // server-side Cloud Function updates friendIds (accept/remove).
+        myProfileListener = fs.usersCollection.document(userId)
+            .addSnapshotListener { [weak self] snapshot, _ in
+                guard let self else { return }
+                let friendIds = snapshot?.data()?["friendIds"] as? [String] ?? []
+                guard friendIds != self.lastFriendIds else { return }
+                self.lastFriendIds = friendIds
+                Task { await self.fetchFriends() }
             }
 
         // Listen for groups the user is a member of
@@ -129,21 +143,11 @@ class FriendService: ObservableObject {
     }
 
     func acceptFriendRequest(friendshipId: String) async throws {
-        let ref = fs.friendshipsCollection.document(friendshipId)
-        let doc = try await ref.getDocument()
-        guard let fromUserId = doc.data()?["fromUserId"] as? String else { return }
-
-        // Atomically: update status + add to both users' friendIds
-        let batch = fs.db.batch()
-        batch.updateData(["status": "accepted"], forDocument: ref)
-        batch.updateData(["friendIds": FieldValue.arrayUnion([fromUserId])],
-                         forDocument: fs.usersCollection.document(userId))
-        batch.updateData(["friendIds": FieldValue.arrayUnion([userId])],
-                         forDocument: fs.usersCollection.document(fromUserId))
-        try await batch.commit()
-
-        // Refresh friends list
-        await fetchFriends()
+        // Only flip the status — security rules forbid writing the other
+        // user's document. The onFriendshipWritten Cloud Function syncs
+        // both friendIds arrays, and the profile listener refreshes the list.
+        try await fs.friendshipsCollection.document(friendshipId)
+            .updateData(["status": "accepted"])
     }
 
     func rejectFriendRequest(friendshipId: String) async throws {
@@ -152,12 +156,22 @@ class FriendService: ObservableObject {
     }
 
     func removeFriend(userId friendId: String) async throws {
-        let batch = fs.db.batch()
-        batch.updateData(["friendIds": FieldValue.arrayRemove([friendId])],
-                         forDocument: fs.usersCollection.document(userId))
-        batch.updateData(["friendIds": FieldValue.arrayRemove([userId])],
-                         forDocument: fs.usersCollection.document(friendId))
-        try await batch.commit()
+        // Mark the friendship removed; the Cloud Function unlinks both
+        // friendIds arrays with admin privileges.
+        let sent = try await fs.friendshipsCollection
+            .whereField("fromUserId", isEqualTo: userId)
+            .whereField("toUserId", isEqualTo: friendId)
+            .whereField("status", isEqualTo: "accepted")
+            .getDocuments()
+        let received = try await fs.friendshipsCollection
+            .whereField("fromUserId", isEqualTo: friendId)
+            .whereField("toUserId", isEqualTo: userId)
+            .whereField("status", isEqualTo: "accepted")
+            .getDocuments()
+
+        for doc in sent.documents + received.documents {
+            try await doc.reference.updateData(["status": "removed"])
+        }
 
         await MainActor.run {
             friends.removeAll { $0.id == friendId }

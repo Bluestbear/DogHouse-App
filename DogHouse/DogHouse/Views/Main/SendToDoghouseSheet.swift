@@ -13,6 +13,7 @@ struct SendToDoghouseSheet: View {
 
     @State private var reason = ""
     @State private var suggestion = ""
+    @State private var isPublic = false
     @State private var isSending = false
     @State private var showError = false
     @State private var errorText = ""
@@ -106,6 +107,30 @@ struct SendToDoghouseSheet: View {
                     }
                     .padding(.horizontal, 20)
 
+                    // SECTION 3 — Share with friends?
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(isOn: $isPublic) {
+                            HStack(spacing: 8) {
+                                Text("📣")
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Share with friends")
+                                        .font(.subheadline.bold())
+                                        .foregroundStyle(headerColor)
+                                    Text(isPublic
+                                         ? "Friends can see this and react. Two dogs in at once starts a jailbreak vote!"
+                                         : "Just between you two.")
+                                        .font(.caption)
+                                        .foregroundStyle(headerColor.opacity(0.65))
+                                }
+                            }
+                        }
+                        .tint(Color(red: 0.68, green: 0.42, blue: 0.18))
+                        .padding(14)
+                        .background(Color.white.opacity(0.85))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .padding(.horizontal, 20)
+
                     // Space so content isn't hidden under sticky button
                     Color.clear.frame(height: 100)
                 }
@@ -164,7 +189,8 @@ struct SendToDoghouseSheet: View {
             let sug = suggestion.trimmingCharacters(in: .whitespaces)
             try await doghouseService.sendToDoghouse(
                 reason: reason.trimmingCharacters(in: .whitespaces),
-                suggestion: sug.isEmpty ? nil : sug
+                suggestion: sug.isEmpty ? nil : sug,
+                isPublic: isPublic
             )
             SoundService.shared.playSendToDoghouse()
             dismiss()

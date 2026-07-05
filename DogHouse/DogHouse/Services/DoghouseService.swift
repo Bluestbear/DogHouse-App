@@ -199,8 +199,9 @@ class DoghouseService: ObservableObject {
     // MARK: - Core Actions
 
     /// Send partner to the doghouse. Current user becomes the sender; partner becomes the receiver.
-    /// Costs 1 grace charge.
-    func sendToDoghouse(reason: String, suggestion: String?) async throws {
+    /// Costs 1 grace charge. When `isPublic` is true, a feed post is created
+    /// so the sender's friends can see and react to the sending.
+    func sendToDoghouse(reason: String, suggestion: String?, isPublic: Bool = false) async throws {
         guard let partnerId, partnerId != "skipped" else { return }
 
         // Check if partner has immunity
@@ -250,6 +251,30 @@ class DoghouseService: ObservableObject {
             "lastGraceRecharge": Timestamp(date: now)
         ], forDocument: fs.usersCollection.document(userId))
 
+        if isPublic {
+            let myData = myDoc.data() ?? [:]
+            let partnerData = partnerDoc.data() ?? [:]
+            let friendIds = myData["friendIds"] as? [String] ?? []
+            let audience = Array(Set(friendIds + [userId, partnerId]))
+
+            let postRef = fs.feedPostsCollection.document()
+            batch.setData([
+                "eventId": docRef.documentID,
+                "senderId": userId,
+                "receiverId": partnerId,
+                "senderName": myData["displayName"] as? String ?? "Someone",
+                "receiverName": partnerData["displayName"] as? String ?? "their partner",
+                "senderAvatarId": myData["avatarId"] as? String ?? "dog_1",
+                "receiverAvatarId": partnerData["avatarId"] as? String ?? "dog_1",
+                "reason": reason,
+                "createdAt": Timestamp(date: now),
+                "status": "active",
+                "audienceIds": audience,
+                "reactions": [:],
+                "coupleKey": key
+            ], forDocument: postRef)
+        }
+
         try await batch.commit()
         // Snapshot listeners will update both devices
     }
@@ -266,6 +291,19 @@ class DoghouseService: ObservableObject {
         ])
         // Snapshot listeners handle the update on both devices.
         // The receiver writes their own immunityUntil when they detect the release.
+
+        // If this sending was public, close the feed post too (non-fatal)
+        if let posts = try? await fs.feedPostsCollection
+            .whereField("eventId", isEqualTo: event.id)
+            .whereField("status", isEqualTo: "active")
+            .getDocuments() {
+            for doc in posts.documents {
+                try? await doc.reference.updateData([
+                    "status": "released",
+                    "endedAt": Timestamp(date: now)
+                ])
+            }
+        }
     }
 
     private func grantSelfImmunity() async {

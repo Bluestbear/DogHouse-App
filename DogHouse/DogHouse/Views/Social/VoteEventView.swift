@@ -71,14 +71,14 @@ struct VoteEventView: View {
             currentDate = date
             guard timeRemaining <= 0, !isResolving, resolvedWinnerId == nil else { return }
             isResolving = true
-            // Compute winner locally for immediate display
+            // Compute winner locally for immediate display; the server
+            // (resolveExpiredVotes) is the authority and performs the release.
             let liveEvent = voteService.activeVoteEvents.first { $0.id == voteEvent.id } ?? voteEvent
             var voteCounts: [String: Int] = [:]
             for votedForId in liveEvent.votes.values {
                 voteCounts[votedForId, default: 0] += 1
             }
             resolvedWinnerId = voteCounts.max(by: { $0.value < $1.value })?.key
-            Task { try? await voteService.resolveVoteEvent(voteEventId: voteEvent.id) }
         }
         .overlay {
             if showConfetti {
