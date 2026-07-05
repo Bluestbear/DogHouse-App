@@ -24,6 +24,7 @@ struct FeedPost: Codable, Identifiable, Equatable {
     var status: String // "active" | "released"
     var audienceIds: [String]
     var reactions: [String: String]? // uid -> "back" | "dog"
+    var roasts: [String: String]? = nil // uid -> canned roast text
     var voteEventId: String?
     var releasedByVote: Bool?
 
@@ -60,4 +61,18 @@ enum FeedReaction: String {
         case .dog: return "🐶"
         }
     }
+}
+
+/// Canned roasts — playful, fixed set so the feed stays fun, never mean
+enum CannedRoast {
+    static let all = [
+        "Justice served 🍖",
+        "FREE MY BOY",
+        "Guilty as charged 🐕‍🦺",
+        "The audacity!",
+        "Somebody call the pawlice 🚨",
+        "Straight to the pound",
+        "He would never!! (he did)",
+        "Bad dog. No treats.",
+    ]
 }

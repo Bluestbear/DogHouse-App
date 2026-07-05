@@ -73,6 +73,15 @@ class FeedService: ObservableObject {
         ])
     }
 
+    /// Set or replace my roast on a post; nil clears it
+    func roast(_ post: FeedPost, with text: String?) async throws {
+        guard userId != "mock_user" else { return }
+        let value: Any = text ?? FieldValue.delete()
+        try await fs.feedPostsCollection.document(post.id).updateData([
+            "roasts.\(userId)": value
+        ])
+    }
+
     // MARK: - Mock Data (Preview only)
 
     private func loadMockData() {

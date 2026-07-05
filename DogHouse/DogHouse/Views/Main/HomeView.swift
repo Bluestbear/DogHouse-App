@@ -20,6 +20,7 @@ import WidgetKit
 struct HomeView: View {
     @EnvironmentObject var authService: AuthService
     @StateObject private var doghouseService = DoghouseService(userId: "mock_user", partnerId: "mock_partner")
+    @StateObject private var notificationService = NotificationService.shared
 
     @State private var showSendSheet = false
     @State private var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -88,6 +89,11 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
+                    // Notifications disabled — the app can't work without them
+                    if notificationService.authStatus == .denied {
+                        notificationsDeniedBanner
+                    }
+
                     // ==========================================
                     // TOP SECTION: My own dog's status
                     // ==========================================
@@ -148,6 +154,21 @@ struct HomeView: View {
                 }
             }
             .task { writeWidgetState() }
+            // Push action buttons ("Let them out", "Belly rub back")
+            .onChange(of: notificationService.pendingAction, initial: true) { _, action in
+                guard let action else { return }
+                notificationService.pendingAction = nil
+                switch action {
+                case .releasePartner:
+                    showReleaseAnimation = true
+                    Task {
+                        try? await doghouseService.releasePartner(releasedBy: "redemption")
+                        SoundService.shared.playRelease()
+                    }
+                case .bellyRubBack:
+                    handleBellyRubSend()
+                }
+            }
             .onChange(of: doghouseService.iAmInDoghouse) { writeWidgetState() }
             .onChange(of: doghouseService.partnerIsInDoghouse) { writeWidgetState() }
             .onChange(of: authService.userProfile?.avatarId) { writeWidgetState() }
@@ -174,6 +195,38 @@ struct HomeView: View {
                 .zIndex(100)
             }
         }
+    }
+
+    // MARK: - Notifications Denied Banner
+
+    private var notificationsDeniedBanner: some View {
+        Button {
+            notificationService.openSystemSettings()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "bell.slash.fill")
+                    .font(.title3)
+                    .foregroundStyle(.white)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notifications are off")
+                        .font(.dhBodyBold)
+                        .foregroundStyle(.white)
+                    Text("DogHouse can't work without them — tap to enable in Settings")
+                        .font(.dhCaption)
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            .padding(14)
+            .background(Color.red.gradient)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .accessibilityLabel("Notifications are disabled. Tap to open Settings and enable them.")
     }
 
     // MARK: - My Status Section (TOP)
@@ -351,6 +404,60 @@ struct HomeView: View {
                 .background(Color(.systemGray5))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
+                // Redemption: mark the make-it-up suggestion as done
+                if let suggestion = event.suggestion {
+                    if event.redemptionRequested == true {
+                        HStack(spacing: 10) {
+                            Image(systemName: "hourglass")
+                                .foregroundStyle(Color.cozyOrange)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Redemption requested")
+                                    .font(.dhBodyBold)
+                                Text("Waiting for \(partnerName) to confirm...")
+                                    .font(.dhCaption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(10)
+                        .background(Color.cozyOrange.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    } else {
+                        Button {
+                            HapticService.shared.success()
+                            Task {
+                                do {
+                                    try await doghouseService.requestRedemption()
+                                } catch {
+                                    errorMessage = "Couldn't send: \(error.localizedDescription)"
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Text("🦴")
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("I did it!")
+                                        .font(.dhBodyBold)
+                                    Text("\"\(suggestion)\" — tell \(partnerName) you made it up")
+                                        .font(.dhCaption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "paperplane.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(Color.freedomGreen)
+                            }
+                            .padding(10)
+                            .background(Color.freedomGreen.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Mark the make-it-up suggestion as done and notify \(partnerName)")
+                    }
+                }
+
                 if coupleTasks.isEmpty && coupleTasksLoaded {
                     Button {
                         showTasksSheet = true
@@ -510,12 +617,36 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            // Release button
+            // Redemption requested — the dog says they made it up
+            if event.redemptionRequested == true {
+                HStack(spacing: 10) {
+                    Text("🦴")
+                        .font(.title3)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(partnerName) says they made it up!")
+                            .font(.dhBodyBold)
+                        if let suggestion = event.suggestion {
+                            Text("\"\(suggestion)\"")
+                                .font(.dhCaption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .background(Color.cozyOrange.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+
+            // Release button — confirming a redemption also rewards treats
             Button {
                 showReleaseAnimation = true
+                let byRedemption = event.redemptionRequested == true
                 Task {
                     do {
-                        try await doghouseService.releasePartner()
+                        try await doghouseService.releasePartner(
+                            releasedBy: byRedemption ? "redemption" : "sender"
+                        )
                         SoundService.shared.playRelease()
                     } catch {
                         errorMessage = "Failed to release: \(error.localizedDescription)"
@@ -524,7 +655,9 @@ struct HomeView: View {
             } label: {
                 HStack {
                     Image(systemName: "lock.open.fill")
-                    Text("Let \(partnerName) Out 🏠")
+                    Text(event.redemptionRequested == true
+                         ? "Confirm & Let \(partnerName) Out 🦴"
+                         : "Let \(partnerName) Out 🏠")
                 }
                 .font(.headline)
                 .frame(maxWidth: .infinity)

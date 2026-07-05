@@ -10,6 +10,9 @@ struct ProfileTabView: View {
     @StateObject private var doghouseService = DoghouseService(userId: "mock_user", partnerId: "mock_partner")
     @State private var showAvatarPicker = false
     @State private var showSignOutAlert = false
+    @State private var showDeleteAlert = false
+    @State private var deleteConfirmationText = ""
+    @State private var isDeleting = false
     @State private var showUnpairAlert = false
     @State private var showRepairSheet = false
     @State private var unpairError: String?
@@ -128,12 +131,25 @@ struct ProfileTabView: View {
 
     private var statsSection: some View {
         Section("Stats") {
-            let history = doghouseService.doghouseHistory
+            let stats = DoghouseStats(
+                history: doghouseService.doghouseHistory,
+                userId: myUserId,
+                accountCreatedAt: authService.userProfile?.createdAt
+            )
 
-            StatRow(label: "Times in the DogHouse", value: "\(history.filter { $0.receiverId == myUserId }.count)", icon: "house.fill", color: .red)
-            StatRow(label: "Times you sent them", value: "\(history.filter { $0.senderId == myUserId }.count)", icon: "arrow.right.circle.fill", color: Color.cozyOrange)
-            StatRow(label: "Current streak outside", value: doghouseService.timeSinceMyLastRelease().formattedDuration, icon: "flame.fill", color: Color.freedomGreen)
-            StatRow(label: "Times saved by squad", value: "0", icon: "person.3.fill", color: Color.dogHouseBlue)
+            StatRow(label: "Times in the DogHouse", value: "\(stats.timesInDoghouse)", icon: "house.fill", color: .red)
+            StatRow(label: "Times you sent them", value: "\(stats.timesSentPartner)", icon: "arrow.right.circle.fill", color: Color.cozyOrange)
+            StatRow(label: "Current clean streak", value: stats.currentCleanStreak.formattedDuration, icon: "flame.fill", color: Color.freedomGreen)
+            StatRow(label: "Longest clean streak", value: stats.longestCleanStreak.formattedDuration, icon: "trophy.fill", color: .yellow)
+            if stats.timesInDoghouse > 0 {
+                StatRow(label: "Total time served", value: stats.totalTimeServed.formattedDuration, icon: "hourglass", color: .secondary)
+            }
+            if stats.timesSavedByVote > 0 {
+                StatRow(label: "Times saved by the people", value: "\(stats.timesSavedByVote)", icon: "person.3.fill", color: Color.dogHouseBlue)
+            }
+            if stats.timesRedeemed > 0 {
+                StatRow(label: "Times redeemed", value: "\(stats.timesRedeemed)", icon: "checkmark.seal.fill", color: Color.freedomGreen)
+            }
         }
     }
 
@@ -252,10 +268,49 @@ struct ProfileTabView: View {
 
     private var accountSection: some View {
         Section {
+            Link(destination: URL(string: "https://doghouse-5e80e.web.app/privacy.html")!) {
+                Label("Privacy Policy", systemImage: "hand.raised.fill")
+            }
+
             Button(role: .destructive) {
                 showSignOutAlert = true
             } label: {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+
+            Button(role: .destructive) {
+                deleteConfirmationText = ""
+                showDeleteAlert = true
+            } label: {
+                if isDeleting {
+                    HStack {
+                        ProgressView()
+                        Text("Deleting account...")
+                    }
+                } else {
+                    Label("Delete Account", systemImage: "trash.fill")
+                }
+            }
+            .disabled(isDeleting)
+            .alert("Delete your account?", isPresented: $showDeleteAlert) {
+                TextField("Type DELETE to confirm", text: $deleteConfirmationText)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.characters)
+                Button("Delete Forever", role: .destructive) {
+                    guard deleteConfirmationText == "DELETE" else { return }
+                    isDeleting = true
+                    Task {
+                        do {
+                            try await authService.deleteAccount()
+                        } catch {
+                            unpairError = error.localizedDescription
+                            isDeleting = false
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This permanently erases your profile, history, friendships, and feed posts, and unpairs your partner. It cannot be undone. Type DELETE to confirm.")
             }
         }
     }

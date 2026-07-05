@@ -34,8 +34,13 @@ service cloud.firestore {
       );
       allow create: if authed() &&
         request.auth.uid == request.resource.data.senderId;
-      allow update: if authed() &&
-        request.auth.uid == resource.data.senderId;
+      // Sender controls the event; the receiver may only raise the
+      // "I made it up" flag (redemption request).
+      allow update: if authed() && (
+        request.auth.uid == resource.data.senderId
+        || (request.auth.uid == resource.data.receiverId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['redemptionRequested']))
+      );
     }
 
     // Clients only ever touch the status field; friendIds syncing is done
@@ -109,10 +114,17 @@ service cloud.firestore {
         request.auth.uid == resource.data.senderId
         || (
           request.auth.uid in resource.data.audienceIds
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'roasts'])
           && request.resource.data.get('reactions', {}).diff(resource.data.get('reactions', {})).affectedKeys().hasOnly([request.auth.uid])
+          && request.resource.data.get('roasts', {}).diff(resource.data.get('roasts', {})).affectedKeys().hasOnly([request.auth.uid])
         )
       );
+    }
+
+    // Account deletion requests — write-only marker for your own uid;
+    // the onDeletionRequest Cloud Function does the actual cleanup.
+    match /deletionRequests/{userId} {
+      allow create: if authed() && request.auth.uid == userId;
     }
 
     // Only the two partners in the couple can access their onboarding doc.

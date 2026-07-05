@@ -279,15 +279,26 @@ class DoghouseService: ObservableObject {
         // Snapshot listeners will update both devices
     }
 
+    /// The dog marks the make-it-up suggestion as done; the sender gets
+    /// a push asking to confirm. Rules allow the receiver to set only this field.
+    func requestRedemption() async throws {
+        guard let event = myDoghouseEvent else { return }
+        try await fs.doghouseEventsCollection.document(event.id).updateData([
+            "redemptionRequested": true
+        ])
+    }
+
     /// Release partner from the doghouse. Only the sender can do this.
     /// Marks the event inactive; the receiver's listener grants them immunity on their own device.
-    func releasePartner() async throws {
+    /// releasedBy "redemption" additionally awards the dog treats (server-side).
+    func releasePartner(releasedBy: String = "sender") async throws {
         guard let event = partnerDoghouseEvent else { return }
 
         let now = Date()
         try await fs.doghouseEventsCollection.document(event.id).updateData([
             "isActive": false,
-            "endedAt": Timestamp(date: now)
+            "endedAt": Timestamp(date: now),
+            "releasedBy": releasedBy
         ])
         // Snapshot listeners handle the update on both devices.
         // The receiver writes their own immunityUntil when they detect the release.

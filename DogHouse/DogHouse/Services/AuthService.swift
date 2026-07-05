@@ -215,6 +215,17 @@ class AuthService: ObservableObject {
         }
     }
 
+    /// Request permanent account deletion. Writes a deletion request that the
+    /// onDeletionRequest Cloud Function processes (wipes all data + the Auth
+    /// account with admin privileges), then signs out locally.
+    func deleteAccount() async throws {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        try await fs.db.collection("deletionRequests").document(uid).setData([
+            "requestedAt": Timestamp(date: Date())
+        ])
+        signOut()
+    }
+
     // MARK: - Pair With Partner
 
     func pairWithPartner(code: String) async throws {

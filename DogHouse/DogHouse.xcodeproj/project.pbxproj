@@ -10,6 +10,7 @@
 		5206651E2F6F511800C321C8 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 5206651D2F6F511800C321C8 /* FirebaseAuth */; };
 		520665202F6F511800C321C8 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 5206651F2F6F511800C321C8 /* FirebaseFirestore */; };
 		520665222F6F511800C321C8 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 520665212F6F511800C321C8 /* FirebaseMessaging */; };
+		52066A0E2F70000000C321C8 /* DogHouseWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 52066A012F70000000C321C8 /* DogHouseWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -27,12 +28,34 @@
 			remoteGlobalIDString = 520664782F6EF32C00C321C8;
 			remoteInfo = DogHouse;
 		};
+		52066A0B2F70000000C321C8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 520664712F6EF32C00C321C8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 52066A042F70000000C321C8;
+			remoteInfo = DogHouseWidgetExtension;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		52066A0D2F70000000C321C8 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				52066A0E2F70000000C321C8 /* DogHouseWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		520664792F6EF32C00C321C8 /* DogHouse.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DogHouse.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5206648F2F6EF32D00C321C8 /* DogHouseTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DogHouseTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		520664992F6EF32D00C321C8 /* DogHouseUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DogHouseUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		52066A012F70000000C321C8 /* DogHouseWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = DogHouseWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -42,6 +65,13 @@
 				Info.plist,
 			);
 			target = 520664782F6EF32C00C321C8 /* DogHouse */;
+		};
+		52066A032F70000000C321C8 /* Exceptions for "DogHouseWidget" folder in "DogHouseWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 52066A042F70000000C321C8 /* DogHouseWidgetExtension */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -62,6 +92,14 @@
 		5206649C2F6EF32D00C321C8 /* DogHouseUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = DogHouseUITests;
+			sourceTree = "<group>";
+		};
+		52066A022F70000000C321C8 /* DogHouseWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				52066A032F70000000C321C8 /* Exceptions for "DogHouseWidget" folder in "DogHouseWidgetExtension" target */,
+			);
+			path = DogHouseWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -91,6 +129,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		52066A062F70000000C321C8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -98,6 +143,7 @@
 			isa = PBXGroup;
 			children = (
 				5206647B2F6EF32C00C321C8 /* DogHouse */,
+				52066A022F70000000C321C8 /* DogHouseWidget */,
 				520664922F6EF32D00C321C8 /* DogHouseTests */,
 				5206649C2F6EF32D00C321C8 /* DogHouseUITests */,
 				5206647A2F6EF32C00C321C8 /* Products */,
@@ -108,6 +154,7 @@
 			isa = PBXGroup;
 			children = (
 				520664792F6EF32C00C321C8 /* DogHouse.app */,
+				52066A012F70000000C321C8 /* DogHouseWidgetExtension.appex */,
 				5206648F2F6EF32D00C321C8 /* DogHouseTests.xctest */,
 				520664992F6EF32D00C321C8 /* DogHouseUITests.xctest */,
 			);
@@ -124,10 +171,12 @@
 				520664752F6EF32C00C321C8 /* Sources */,
 				520664762F6EF32C00C321C8 /* Frameworks */,
 				520664772F6EF32C00C321C8 /* Resources */,
+				52066A0D2F70000000C321C8 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				52066A0C2F70000000C321C8 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				5206647B2F6EF32C00C321C8 /* DogHouse */,
@@ -188,6 +237,28 @@
 			productReference = 520664992F6EF32D00C321C8 /* DogHouseUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		52066A042F70000000C321C8 /* DogHouseWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 52066A0A2F70000000C321C8 /* Build configuration list for PBXNativeTarget "DogHouseWidgetExtension" */;
+			buildPhases = (
+				52066A052F70000000C321C8 /* Sources */,
+				52066A062F70000000C321C8 /* Frameworks */,
+				52066A072F70000000C321C8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				52066A022F70000000C321C8 /* DogHouseWidget */,
+			);
+			name = DogHouseWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = DogHouseWidgetExtension;
+			productReference = 52066A012F70000000C321C8 /* DogHouseWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -209,6 +280,9 @@
 						CreatedOnToolsVersion = 26.3;
 						TestTargetID = 520664782F6EF32C00C321C8;
 					};
+					52066A042F70000000C321C8 = {
+						CreatedOnToolsVersion = 26.3;
+					};
 				};
 			};
 			buildConfigurationList = 520664742F6EF32C00C321C8 /* Build configuration list for PBXProject "DogHouse" */;
@@ -229,6 +303,7 @@
 			projectRoot = "";
 			targets = (
 				520664782F6EF32C00C321C8 /* DogHouse */,
+				52066A042F70000000C321C8 /* DogHouseWidgetExtension */,
 				5206648E2F6EF32D00C321C8 /* DogHouseTests */,
 				520664982F6EF32D00C321C8 /* DogHouseUITests */,
 			);
@@ -251,6 +326,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		520664972F6EF32D00C321C8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		52066A072F70000000C321C8 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -281,6 +363,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		52066A052F70000000C321C8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -293,6 +382,11 @@
 			isa = PBXTargetDependency;
 			target = 520664782F6EF32C00C321C8 /* DogHouse */;
 			targetProxy = 5206649A2F6EF32D00C321C8 /* PBXContainerItemProxy */;
+		};
+		52066A0C2F70000000C321C8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 52066A042F70000000C321C8 /* DogHouseWidgetExtension */;
+			targetProxy = 52066A0B2F70000000C321C8 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -564,6 +658,56 @@
 			};
 			name = Release;
 		};
+		52066A082F70000000C321C8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = DogHouseWidget/DogHouseWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4QU866ZD6N;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DogHouseWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = DogHouseWidget;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.Harrison.DogHouse.DogHouseWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		52066A092F70000000C321C8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = DogHouseWidget/DogHouseWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4QU866ZD6N;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = DogHouseWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = DogHouseWidget;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.Harrison.DogHouse.DogHouseWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -599,6 +743,15 @@
 			buildConfigurations = (
 				520664AB2F6EF32D00C321C8 /* Debug */,
 				520664AC2F6EF32D00C321C8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		52066A0A2F70000000C321C8 /* Build configuration list for PBXNativeTarget "DogHouseWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				52066A082F70000000C321C8 /* Debug */,
+				52066A092F70000000C321C8 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

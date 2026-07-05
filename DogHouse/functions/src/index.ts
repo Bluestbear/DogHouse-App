@@ -1,6 +1,7 @@
 import { initializeApp, getApp, App } from "firebase-admin/app";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
+import { getAuth } from "firebase-admin/auth";
 import { logger } from "firebase-functions/v2";
 import {
   onDocumentWritten,
@@ -24,11 +25,19 @@ function ensureApp(): App {
 const app = ensureApp();
 const db = getFirestore(app);
 const messaging = getMessaging(app);
+const auth = getAuth(app);
+
+// data.type drives in-app routing on tap; category enables action buttons.
+interface NotifyOptions {
+  data?: Record<string, string>;
+  category?: string;
+}
 
 async function notifyUser(
   userId: string,
   title: string,
-  body: string
+  body: string,
+  options: NotifyOptions = {}
 ): Promise<void> {
   try {
     const userDoc = await db.collection("users").doc(userId).get();
@@ -42,13 +51,18 @@ async function notifyUser(
     await messaging.send({
       token: fcmToken,
       notification: { title, body },
+      data: options.data,
       apns: {
         headers: {
           "apns-push-type": "alert",
           "apns-priority": "10",
         },
         payload: {
-          aps: { sound: "default", badge: 1 },
+          aps: {
+            sound: "default",
+            badge: 1,
+            ...(options.category ? { category: options.category } : {}),
+          },
         },
       },
     });
@@ -61,9 +75,12 @@ async function notifyUser(
 async function notifyUsers(
   userIds: string[],
   title: string,
-  body: string
+  body: string,
+  options: NotifyOptions = {}
 ): Promise<void> {
-  await Promise.all([...new Set(userIds)].map((id) => notifyUser(id, title, body)));
+  await Promise.all(
+    [...new Set(userIds)].map((id) => notifyUser(id, title, body, options))
+  );
 }
 
 async function displayName(userId: string): Promise<string> {
@@ -94,7 +111,25 @@ export const onDoghouseEvent = onDocumentWritten(
       await notifyUser(
         receiverId,
         "🐕 You've been sent to the DogHouse!",
-        `${senderName}: "${reason}"`
+        `${senderName}: "${reason}"`,
+        { data: { type: "doghouse" } }
+      );
+      return;
+    }
+
+    // Redemption requested: the dog says they made it up — ask the sender
+    if (
+      before?.redemptionRequested !== true &&
+      after.redemptionRequested === true &&
+      after.isActive === true
+    ) {
+      const receiverName = await displayName(receiverId);
+      const suggestion: string = after.suggestion ?? "made it up to you";
+      await notifyUser(
+        senderId,
+        `🦴 ${receiverName} says they made it up!`,
+        `"${suggestion}" — confirm to let them out`,
+        { data: { type: "redemption" }, category: "REDEMPTION" }
       );
       return;
     }
@@ -104,13 +139,28 @@ export const onDoghouseEvent = onDocumentWritten(
         await notifyUser(
           receiverId,
           "🗳️ The people have spoken!",
-          "Your friends voted you out of the DogHouse. You're FREE! 🎉"
+          "Your friends voted you out of the DogHouse. You're FREE! 🎉",
+          { data: { type: "doghouse" } }
+        );
+      } else if (after.releasedBy === "redemption") {
+        // Redemption confirmed — reward the dog with treats (server-side;
+        // clients can only write their own user document)
+        const treatReward = 25;
+        await db.collection("users").doc(receiverId).update({
+          treats: FieldValue.increment(treatReward),
+        });
+        await notifyUser(
+          receiverId,
+          "🦴 Redemption complete!",
+          `${senderName} confirmed you made it up. You're free + ${treatReward} treats! 🎉`,
+          { data: { type: "doghouse" } }
         );
       } else {
         await notifyUser(
           receiverId,
           "🏠 You've been released!",
-          `${senderName} let you out! Welcome home 🎉`
+          `${senderName} let you out! Welcome home 🎉`,
+          { data: { type: "doghouse" }, category: "RELEASED" }
         );
       }
     }
@@ -133,7 +183,8 @@ export const onBellyRub = onDocumentWritten(
     await notifyUser(
       userId,
       "🐾 Belly rub!",
-      `${fromName} gave you a belly rub ❤️`
+      `${fromName} gave you a belly rub ❤️`,
+      { data: { type: "belly_rub" }, category: "BELLY_RUB" }
     );
   }
 );
@@ -159,7 +210,8 @@ export const onVoteEventCreated = onDocumentCreated(
     await notifyUsers(
       memberIds,
       "🗳️ Vote started in your squad!",
-      "Who Let The Dogs Out? Tap to cast your vote!"
+      "Who Let The Dogs Out? Tap to cast your vote!",
+      { data: { type: "vote" } }
     );
   }
 );
@@ -186,7 +238,8 @@ export const onFriendshipWritten = onDocumentWritten(
       await notifyUser(
         toUserId,
         "🐾 New friend request!",
-        `${fromName} wants to be your friend on DogHouse`
+        `${fromName} wants to be your friend on DogHouse`,
+        { data: { type: "friends" } }
       );
       return;
     }
@@ -206,7 +259,8 @@ export const onFriendshipWritten = onDocumentWritten(
       await notifyUser(
         fromUserId,
         "🎉 Friend request accepted!",
-        `${toName} accepted your friend request`
+        `${toName} accepted your friend request`,
+        { data: { type: "friends" } }
       );
       return;
     }
@@ -249,7 +303,8 @@ export const onFeedPostCreated = onDocumentCreated(
     await notifyUsers(
       friendsToNotify,
       "📣 DogHouse news!",
-      `${senderName} sent ${receiverName} to the DogHouse: "${post.reason}"`
+      `${senderName} sent ${receiverName} to the DogHouse: "${post.reason}"`,
+      { data: { type: "feed" } }
     );
 
     // ── Jailbreak vote detection ──
@@ -316,7 +371,8 @@ export const onFeedPostCreated = onDocumentCreated(
     await notifyUsers(
       audience,
       "🚨 Two dogs in the house!",
-      `${dogNames[dogs[0]]} and ${dogNames[dogs[1]]} are BOTH in the DogHouse. Vote who goes free! 🗳️`
+      `${dogNames[dogs[0]]} and ${dogNames[dogs[1]]} are BOTH in the DogHouse. Vote who goes free! 🗳️`,
+      { data: { type: "vote", voteId: voteRef.id } }
     );
     logger.info(`[jailbreakVote] Created vote ${voteRef.id} for ${dogs.join(", ")}`);
   }
@@ -342,15 +398,32 @@ export const onFeedPostReaction = onDocumentUpdated(
         await notifyUser(
           after.senderId,
           "❤️ Someone backs your call!",
-          `${reactorName} supports sending ${after.receiverName} to the DogHouse`
+          `${reactorName} supports sending ${after.receiverName} to the DogHouse`,
+          { data: { type: "feed" } }
         );
       } else if (reaction === "dog" && uid !== after.receiverId) {
         await notifyUser(
           after.receiverId,
           "🐶 Someone's on your side!",
-          `${reactorName} thinks you don't belong in the DogHouse`
+          `${reactorName} thinks you don't belong in the DogHouse`,
+          { data: { type: "feed" } }
         );
       }
+    }
+
+    // Roasts — playful canned one-liners aimed at the dog
+    const beforeRoasts: Record<string, string> = before.roasts ?? {};
+    const afterRoasts: Record<string, string> = after.roasts ?? {};
+    for (const [uid, roast] of Object.entries(afterRoasts)) {
+      if (beforeRoasts[uid] === roast) continue;
+      if (uid === after.receiverId) continue;
+      const roasterName = await displayName(uid);
+      await notifyUser(
+        after.receiverId,
+        `🔥 ${roasterName} roasted you`,
+        `"${roast}"`,
+        { data: { type: "feed" } }
+      );
     }
   }
 );
@@ -386,6 +459,7 @@ export const resolveExpiredVotes = onSchedule(
 
       // Release every winner's active doghouse event (tie → both go free)
       const releasedNames: string[] = [];
+      const overruledSenderIds: string[] = [];
       for (const winnerId of winners) {
         const events = await db
           .collection("doghouseEvents")
@@ -398,6 +472,7 @@ export const resolveExpiredVotes = onSchedule(
             endedAt: now,
             releasedBy: "vote",
           });
+          overruledSenderIds.push(ev.data().senderId as string);
         }
         const posts = await db
           .collection("feedPosts")
@@ -432,31 +507,118 @@ export const resolveExpiredVotes = onSchedule(
           .get();
         audience = groupDoc.data()?.memberIds ?? [];
       }
-      // Winners get their own richer push from onDoghouseEvent
-      audience = audience.filter((id) => !winners.includes(id));
+      // Winners get their own richer push from onDoghouseEvent, and the
+      // senders whose dogs were freed get the anthem instead.
+      audience = audience.filter(
+        (id) => !winners.includes(id) && !overruledSenderIds.includes(id)
+      );
+
+      // The sender whose dog the crowd freed gets the classic
+      await notifyUsers(
+        overruledSenderIds,
+        "🎶 Who?! Who?! Who?! Who?!",
+        `WHO LET THE DOGS OUT?! Your friends did — ${releasedNames.join(" and ")} walked free! 🐕🎉`,
+        { data: { type: "doghouse" } }
+      );
 
       if (winners.length === 0) {
         await notifyUsers(
           audience,
           "🗳️ The vote is over",
-          "No votes were cast... nobody goes free 😬"
+          "No votes were cast... nobody goes free 😬",
+          { data: { type: "feed" } }
         );
       } else if (winners.length === 1) {
         await notifyUsers(
           audience,
           "🗳️ The people have spoken!",
-          `${releasedNames[0]} has been voted out of the DogHouse! 🎉`
+          `${releasedNames[0]} has been voted out of the DogHouse! 🎉`,
+          { data: { type: "feed" } }
         );
       } else {
         await notifyUsers(
           audience,
           "🤝 It's a tie!",
-          `${releasedNames.join(" and ")} both go free! JAILBREAK! 🎉`
+          `${releasedNames.join(" and ")} both go free! JAILBREAK! 🎉`,
+          { data: { type: "feed" } }
         );
       }
       logger.info(
         `[resolveVotes] Resolved ${voteDoc.id}: winners=${winners.join(",") || "none"}`
       );
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────
+// 8. Account deletion — client writes deletionRequests/{uid};
+//    this function wipes all their data and the Auth account.
+// ─────────────────────────────────────────────────────────────
+export const onDeletionRequest = onDocumentCreated(
+  { document: "deletionRequests/{uid}", region: REGION },
+  async (event) => {
+    const uid = event.params.uid;
+    logger.info(`[deleteAccount] Processing deletion for ${uid}`);
+
+    async function deleteWhere(
+      collection: string,
+      field: string,
+      value: string
+    ): Promise<void> {
+      const snap = await db.collection(collection).where(field, "==", value).get();
+      await Promise.all(snap.docs.map((d) => d.ref.delete()));
+    }
+
+    try {
+      // Unlink partner (only if still pointing at this user)
+      const userDoc = await db.collection("users").doc(uid).get();
+      const partnerId = userDoc.data()?.partnerId as string | undefined;
+      if (partnerId && partnerId !== "skipped") {
+        const partnerDoc = await db.collection("users").doc(partnerId).get();
+        if (partnerDoc.data()?.partnerId === uid) {
+          await partnerDoc.ref.update({ partnerId: null });
+          await notifyUser(
+            partnerId,
+            "💔 Your partner left DogHouse",
+            "Their account was deleted. You can pair with a new partner anytime."
+          );
+        }
+      }
+
+      // Remove this user from everyone's friend lists
+      const friendsOf = await db
+        .collection("users")
+        .where("friendIds", "array-contains", uid)
+        .get();
+      await Promise.all(
+        friendsOf.docs.map((d) =>
+          d.ref.update({ friendIds: FieldValue.arrayRemove(uid) })
+        )
+      );
+
+      // Delete owned/related documents
+      await deleteWhere("partnerCodes", "userId", uid);
+      await deleteWhere("friendships", "fromUserId", uid);
+      await deleteWhere("friendships", "toUserId", uid);
+      await deleteWhere("feedPosts", "senderId", uid);
+      await deleteWhere("feedPosts", "receiverId", uid);
+      await deleteWhere("doghouseEvents", "senderId", uid);
+      await deleteWhere("doghouseEvents", "receiverId", uid);
+      await db.collection("bellyRubs").doc(uid).delete();
+      await db.collection("users").doc(uid).delete();
+
+      // Delete the Firebase Auth account
+      try {
+        await auth.deleteUser(uid);
+      } catch (err) {
+        logger.warn(`[deleteAccount] Auth user already gone for ${uid}:`, err);
+      }
+
+      // Clean up the request marker itself
+      await event.data?.ref.delete();
+      logger.info(`[deleteAccount] Completed deletion for ${uid}`);
+    } catch (err) {
+      logger.error(`[deleteAccount] Failed for ${uid}:`, err);
     }
   }
 );

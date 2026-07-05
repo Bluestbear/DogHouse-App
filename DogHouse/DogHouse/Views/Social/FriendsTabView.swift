@@ -33,6 +33,15 @@ struct FriendsTabView: View {
                     feedSection
                 }
 
+                // Top Dog — most time served among friends this week
+                if feedService.posts.count > 1 {
+                    Section {
+                        TopDogLeaderboard(posts: feedService.posts)
+                    } header: {
+                        Text("Top Dog 🏆 (this week)")
+                    }
+                }
+
                 // Add a Friend
                 addFriendSection
 

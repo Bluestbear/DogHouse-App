@@ -18,15 +18,19 @@ class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNot
     ) -> Bool {
         FirebaseApp.configure()
 
-        // Push notification setup
+        // Push notification setup. The permission request itself happens in
+        // the UI (explainer screen / MainTabView) — never cold at launch.
         Messaging.messaging().delegate = self
         UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
-            guard granted else { return }
-            DispatchQueue.main.async {
-                #if !targetEnvironment(simulator)
-                application.registerForRemoteNotifications()
-                #endif
+        NotificationService.registerCategories()
+
+        // Already-authorized users still need APNs registration every launch
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            Task { @MainActor in
+                NotificationService.shared.authStatus = settings.authorizationStatus
+                if settings.authorizationStatus == .authorized {
+                    NotificationService.registerForRemoteNotifications()
+                }
             }
         }
 
@@ -36,6 +40,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNot
     func applicationDidBecomeActive(_ application: UIApplication) {
         // Server pushes set badge=1; clear it whenever the app is opened
         UNUserNotificationCenter.current().setBadgeCount(0)
+        // Status may have changed in Settings while backgrounded
+        Task { await NotificationService.shared.refreshStatus() }
     }
 
     // MARK: - APNs Token
@@ -70,6 +76,22 @@ class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNot
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .badge, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+        let actionId = response.actionIdentifier
+        Task { @MainActor in
+            NotificationService.shared.handleNotificationResponse(
+                userInfo: userInfo,
+                actionIdentifier: actionId
+            )
+        }
+        completionHandler()
     }
 }
 
