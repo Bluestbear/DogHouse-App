@@ -1,0 +1,98 @@
+//
+//  Cosmetic.swift
+//  DogHouse
+//
+
+import SwiftUI
+
+// MARK: - Category
+
+enum CosmeticCategory: String, CaseIterable, Codable {
+    case necklace
+    case hat
+    case glasses
+
+    var displayName: String {
+        switch self {
+        case .necklace: "Necklaces"
+        case .hat:      "Hats"
+        case .glasses:  "Glasses"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .necklace: "sparkles"
+        case .hat:      "theatermasks"
+        case .glasses:  "eyeglasses"
+        }
+    }
+}
+
+// MARK: - Item
+
+struct CosmeticItem: Identifiable {
+    let id: String
+    let name: String
+    let category: CosmeticCategory
+    let price: Int
+    let primaryColor: Color
+    let accentColor: Color
+    let emoji: String
+
+    // MARK: Catalog
+
+    static let catalog: [CosmeticItem] = [
+        // Necklaces
+        .init(id: "necklace_red",     name: "Ruby",        category: .necklace, price: 50,  primaryColor: Color(red: 0.85, green: 0.15, blue: 0.15), accentColor: Color(red: 0.60, green: 0.05, blue: 0.05), emoji: "🔴"),
+        .init(id: "necklace_blue",    name: "Sapphire",    category: .necklace, price: 50,  primaryColor: Color(red: 0.15, green: 0.35, blue: 0.90), accentColor: Color(red: 0.08, green: 0.18, blue: 0.60), emoji: "🔵"),
+        .init(id: "necklace_green",   name: "Emerald",     category: .necklace, price: 50,  primaryColor: Color(red: 0.10, green: 0.72, blue: 0.35), accentColor: Color(red: 0.05, green: 0.48, blue: 0.20), emoji: "🟢"),
+        .init(id: "necklace_purple",  name: "Amethyst",    category: .necklace, price: 75,  primaryColor: Color(red: 0.62, green: 0.18, blue: 0.88), accentColor: Color(red: 0.40, green: 0.08, blue: 0.60), emoji: "🟣"),
+        .init(id: "necklace_pink",    name: "Rose Quartz", category: .necklace, price: 75,  primaryColor: Color(red: 0.95, green: 0.42, blue: 0.65), accentColor: Color(red: 0.72, green: 0.20, blue: 0.42), emoji: "🩷"),
+        .init(id: "necklace_gold",    name: "Gold Chain",  category: .necklace, price: 120, primaryColor: Color(red: 0.95, green: 0.78, blue: 0.12), accentColor: Color(red: 0.75, green: 0.55, blue: 0.05), emoji: "✨"),
+        .init(id: "necklace_rainbow", name: "Rainbow",     category: .necklace, price: 200, primaryColor: Color(red: 0.95, green: 0.20, blue: 0.20), accentColor: Color(red: 0.20, green: 0.55, blue: 0.95), emoji: "🌈"),
+        // Hats
+        .init(id: "hat_party",  name: "Party Hat",  category: .hat, price: 80,  primaryColor: Color(red: 0.95, green: 0.28, blue: 0.28), accentColor: Color(red: 0.20, green: 0.52, blue: 0.95), emoji: "🥳"),
+        .init(id: "hat_crown",  name: "Crown",      category: .hat, price: 250, primaryColor: Color(red: 0.98, green: 0.80, blue: 0.10), accentColor: Color(red: 0.85, green: 0.18, blue: 0.18), emoji: "👑"),
+        .init(id: "hat_cowboy", name: "Cowboy Hat", category: .hat, price: 100, primaryColor: Color(red: 0.52, green: 0.32, blue: 0.12), accentColor: Color(red: 0.30, green: 0.18, blue: 0.06), emoji: "🤠"),
+        .init(id: "hat_chef",   name: "Chef's Hat", category: .hat, price: 100, primaryColor: .white,                                    accentColor: Color(red: 0.78, green: 0.78, blue: 0.78), emoji: "👨‍🍳"),
+        // Glasses
+        .init(id: "glasses_cool",  name: "Cool Shades",  category: .glasses, price: 80,  primaryColor: Color(red: 0.10, green: 0.10, blue: 0.10), accentColor: Color(red: 0.30, green: 0.30, blue: 0.30), emoji: "😎"),
+        .init(id: "glasses_heart", name: "Heart Frames", category: .glasses, price: 100, primaryColor: Color(red: 0.92, green: 0.20, blue: 0.40), accentColor: Color(red: 0.70, green: 0.08, blue: 0.25), emoji: "🩷"),
+        .init(id: "glasses_star",  name: "Star Frames",  category: .glasses, price: 120, primaryColor: Color(red: 0.95, green: 0.78, blue: 0.10), accentColor: Color(red: 0.75, green: 0.55, blue: 0.05), emoji: "⭐"),
+    ]
+
+    static func item(for id: String) -> CosmeticItem? {
+        catalog.first { $0.id == id }
+    }
+
+    static func items(for category: CosmeticCategory) -> [CosmeticItem] {
+        catalog.filter { $0.category == category }
+    }
+}
+
+// MARK: - Equipped state
+
+struct AvatarCosmetics: Equatable {
+    var necklaceId: String?
+    var hatId: String?
+    var glassesId: String?
+
+    static let none = AvatarCosmetics()
+
+    init(necklaceId: String? = nil, hatId: String? = nil, glassesId: String? = nil) {
+        self.necklaceId = necklaceId
+        self.hatId = hatId
+        self.glassesId = glassesId
+    }
+
+    init(equippedItemIds: [String: String]) {
+        self.necklaceId = equippedItemIds[CosmeticCategory.necklace.rawValue]
+        self.hatId      = equippedItemIds[CosmeticCategory.hat.rawValue]
+        self.glassesId  = equippedItemIds[CosmeticCategory.glasses.rawValue]
+    }
+
+    var necklace: CosmeticItem? { necklaceId.flatMap { CosmeticItem.item(for: $0) } }
+    var hat: CosmeticItem?      { hatId.flatMap      { CosmeticItem.item(for: $0) } }
+    var glasses: CosmeticItem?  { glassesId.flatMap  { CosmeticItem.item(for: $0) } }
+}

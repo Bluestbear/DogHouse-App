@@ -1,0 +1,507 @@
+//
+//  AvatarView.swift
+//  DogHouse
+
+import SwiftUI
+
+struct AvatarView: View {
+    var avatar: DogAvatar
+    var mood: AvatarMood = .happy
+    var size: CGFloat = 80
+    var cosmetics: AvatarCosmetics = .none
+
+    private var scale: CGFloat { size / 80.0 }
+
+    var body: some View {
+        ZStack {
+            tailView
+
+            // Ears sit behind head
+            earView(isLeft: true)
+            earView(isLeft: false)
+
+            bodyView
+
+            // Head drawn on top of ears
+            headShape
+
+            faceView
+
+            pawsView
+
+            collarView
+
+            moodAccessories
+
+            // Cosmetics drawn last (on top)
+            if let hat = cosmetics.hat      { hatView(hat) }
+            if let gl  = cosmetics.glasses  { glassesView(gl) }
+        }
+        .frame(width: size, height: size)
+        .accessibilityLabel("\(avatar.name) dog, feeling \(mood.rawValue)")
+    }
+
+    // MARK: - Tail
+
+    private var tailView: some View {
+        Path { path in
+            path.move(to: CGPoint(x: 2 * scale, y: 20 * scale))
+            path.addQuadCurve(
+                to: CGPoint(x: 26 * scale, y: 2 * scale),
+                control: CGPoint(x: 30 * scale, y: 24 * scale)
+            )
+        }
+        .stroke(avatar.primaryColor, lineWidth: 10 * scale)
+        .frame(width: 34 * scale, height: 28 * scale)
+        .offset(x: 18 * scale, y: 10 * scale)
+    }
+
+    // MARK: - Ears
+
+    private func earView(isLeft: Bool) -> some View {
+        Ellipse()
+            .fill(avatar.primaryColor)
+            .frame(width: 20 * scale, height: 26 * scale)
+            .rotationEffect(.degrees(isLeft ? -6 : 6))
+            .offset(x: (isLeft ? -21 : 21) * scale, y: -21 * scale)
+    }
+
+    // MARK: - Body
+
+    private var bodyView: some View {
+        Ellipse()
+            .fill(avatar.primaryColor)
+            .frame(width: 52 * scale, height: 40 * scale)
+            .offset(y: 16 * scale)
+    }
+
+    // MARK: - Head
+
+    private var headShape: some View {
+        Circle()
+            .fill(avatar.primaryColor)
+            .frame(width: 50 * scale, height: 50 * scale)
+            .offset(y: -8 * scale)
+    }
+
+    // MARK: - Face (all coords relative to head center y=-8)
+
+    private var faceView: some View {
+        ZStack {
+            // Muzzle area — lower face
+            Ellipse()
+                .fill(avatar.muzzleColor)
+                .frame(width: 26 * scale, height: 20 * scale)
+                .offset(y: 10 * scale)
+
+            // Eyes
+            HStack(spacing: 18 * scale) {
+                eyeView
+                eyeView
+            }
+            .offset(y: -7 * scale)
+
+            // Nose — at top of muzzle
+            Ellipse()
+                .fill(Color(red: 0.12, green: 0.08, blue: 0.08))
+                .frame(width: 9 * scale, height: 6 * scale)
+                .offset(y: 2 * scale)
+
+            // Mouth
+            mouthView
+                .offset(y: 12 * scale)
+        }
+        .offset(y: -8 * scale)
+    }
+
+    private var eyeView: some View {
+        ZStack {
+            // White sclera
+            Circle()
+                .fill(Color.white)
+                .frame(width: 14 * scale, height: 14 * scale)
+
+            // Pupil
+            Circle()
+                .fill(Color(red: 0.12, green: 0.08, blue: 0.08))
+                .frame(width: eyePupilSize, height: eyePupilSize)
+                .offset(y: eyeOffset)
+
+            // Shine highlight
+            Circle()
+                .fill(Color.white.opacity(0.75))
+                .frame(width: 4 * scale, height: 4 * scale)
+                .offset(x: 3 * scale, y: -3 * scale)
+        }
+    }
+
+    private var eyePupilSize: CGFloat {
+        switch mood {
+        case .happy, .cozy:  7 * scale
+        case .sad, .hungry:  8 * scale
+        case .freezing:      5 * scale
+        case .dramatic:     10 * scale
+        }
+    }
+
+    private var eyeOffset: CGFloat {
+        switch mood {
+        case .sad, .hungry: 1 * scale
+        default: 0
+        }
+    }
+
+    @ViewBuilder
+    private var mouthView: some View {
+        switch mood {
+        case .happy, .cozy:
+            Path { path in
+                path.addArc(
+                    center: CGPoint(x: 8 * scale, y: 0),
+                    radius: 8 * scale,
+                    startAngle: .degrees(0),
+                    endAngle: .degrees(180),
+                    clockwise: false
+                )
+            }
+            .stroke(Color(red: 0.12, green: 0.08, blue: 0.08), lineWidth: 1.5 * scale)
+            .frame(width: 16 * scale, height: 8 * scale)
+
+        case .sad, .dramatic:
+            Path { path in
+                path.addArc(
+                    center: CGPoint(x: 8 * scale, y: 8 * scale),
+                    radius: 8 * scale,
+                    startAngle: .degrees(180),
+                    endAngle: .degrees(0),
+                    clockwise: false
+                )
+            }
+            .stroke(Color(red: 0.12, green: 0.08, blue: 0.08), lineWidth: 1.5 * scale)
+            .frame(width: 16 * scale, height: 8 * scale)
+
+        case .hungry:
+            Ellipse()
+                .fill(Color(red: 0.12, green: 0.08, blue: 0.08).opacity(0.7))
+                .frame(width: 13 * scale, height: 9 * scale)
+
+        case .freezing:
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: 5 * scale))
+                path.addCurve(
+                    to: CGPoint(x: 18 * scale, y: 5 * scale),
+                    control1: CGPoint(x: 4 * scale, y: 0),
+                    control2: CGPoint(x: 14 * scale, y: 10 * scale)
+                )
+            }
+            .stroke(Color(red: 0.12, green: 0.08, blue: 0.08), lineWidth: 1.5 * scale)
+            .frame(width: 18 * scale, height: 10 * scale)
+        }
+    }
+
+    // MARK: - Paws
+
+    private var pawsView: some View {
+        HStack(spacing: 13 * scale) {
+            pawShape
+            pawShape
+        }
+        .offset(y: 34 * scale)
+    }
+
+    private var pawShape: some View {
+        RoundedRectangle(cornerRadius: 5 * scale)
+            .fill(avatar.primaryColor)
+            .frame(width: 14 * scale, height: 9 * scale)
+    }
+
+    // MARK: - Collar (necklace cosmetic applied here)
+
+    private var collarView: some View {
+        let bandW = 34 * scale
+        let bow   = 16 * scale
+        let necklace = cosmetics.necklace
+        let bandColor = necklace?.primaryColor ?? Color(red: 0.42, green: 0.24, blue: 0.07)
+        let gemColor  = necklace?.primaryColor ?? Color(red: 0.96, green: 0.82, blue: 0.18)
+
+        return ZStack {
+            if necklace?.id == "necklace_rainbow" {
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: 0))
+                    path.addQuadCurve(
+                        to: CGPoint(x: bandW, y: 0),
+                        control: CGPoint(x: bandW / 2, y: bow)
+                    )
+                }
+                .stroke(
+                    LinearGradient(
+                        colors: [.red, .orange, .yellow, .green, .blue, .purple],
+                        startPoint: .leading, endPoint: .trailing
+                    ),
+                    style: StrokeStyle(lineWidth: 4 * scale, lineCap: .round)
+                )
+                .frame(width: bandW, height: bow + 2 * scale)
+            } else {
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: 0))
+                    path.addQuadCurve(
+                        to: CGPoint(x: bandW, y: 0),
+                        control: CGPoint(x: bandW / 2, y: bow)
+                    )
+                }
+                .stroke(
+                    bandColor,
+                    style: StrokeStyle(lineWidth: 3.5 * scale, lineCap: .round)
+                )
+                .frame(width: bandW, height: bow + 2 * scale)
+            }
+
+            // Gem / tag at the lowest point of the collar arc
+            Circle()
+                .fill(gemColor)
+                .overlay(Circle().stroke(Color(red: 0.22, green: 0.13, blue: 0.02), lineWidth: 1.5 * scale))
+                .overlay(
+                    Circle()
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: 3 * scale)
+                        .offset(x: -1 * scale, y: -1 * scale)
+                )
+                .frame(width: 9 * scale)
+                .offset(y: -1 * scale)
+        }
+        .offset(y: 16 * scale)
+    }
+
+    // MARK: - Mood Accessories
+
+    @ViewBuilder
+    private var moodAccessories: some View {
+        switch mood {
+        case .hungry:
+            Capsule()
+                .fill(Color(red: 0.5, green: 0.72, blue: 0.95).opacity(0.7))
+                .frame(width: 4 * scale, height: 7 * scale)
+                .offset(x: 5 * scale, y: 8 * scale)
+
+        case .freezing:
+            Circle()
+                .fill(Color(red: 0.5, green: 0.7, blue: 1.0).opacity(0.18))
+                .frame(width: 50 * scale, height: 50 * scale)
+                .offset(y: -8 * scale)
+
+        case .dramatic:
+            ForEach(0..<3, id: \.self) { i in
+                Capsule()
+                    .fill(Color(red: 0.5, green: 0.72, blue: 0.95).opacity(0.7))
+                    .frame(width: 3 * scale, height: 6 * scale)
+                    .offset(
+                        x: CGFloat([-28, 28, -22][i]) * scale,
+                        y: CGFloat([-18, -12, -6][i]) * scale
+                    )
+            }
+
+        default:
+            EmptyView()
+        }
+    }
+
+    // MARK: - Hat Cosmetics
+    // Head top is at y = -33*scale from ZStack center.
+    // Each hat's bottom edge is positioned there.
+
+    @ViewBuilder
+    private func hatView(_ item: CosmeticItem) -> some View {
+        switch item.id {
+        case "hat_party":  partyHat(item)
+        case "hat_crown":  crownHat(item)
+        case "hat_cowboy": cowboyHat(item)
+        case "hat_chef":   chefHat(item)
+        default: EmptyView()
+        }
+    }
+
+    private func partyHat(_ item: CosmeticItem) -> some View {
+        ZStack {
+            // Cone
+            Path { path in
+                path.move(to: CGPoint(x: 12 * scale, y: 0))
+                path.addLine(to: CGPoint(x: 24 * scale, y: 27 * scale))
+                path.addLine(to: CGPoint(x: 0, y: 27 * scale))
+                path.closeSubpath()
+            }
+            .fill(LinearGradient(colors: [item.primaryColor, item.accentColor], startPoint: .top, endPoint: .bottom))
+            // Accent band at base
+            Capsule()
+                .fill(item.accentColor)
+                .frame(width: 26 * scale, height: 5 * scale)
+                .offset(y: 12 * scale)
+            // Pom pom tip
+            Circle()
+                .fill(Color.yellow)
+                .frame(width: 8 * scale)
+                .offset(y: -12 * scale)
+        }
+        .frame(width: 24 * scale, height: 27 * scale)
+        .offset(y: -(33 + 13.5) * scale)
+    }
+
+    private func crownHat(_ item: CosmeticItem) -> some View {
+        ZStack(alignment: .bottom) {
+            // Three triangular points
+            HStack(spacing: 1 * scale) {
+                ForEach(0..<3, id: \.self) { _ in
+                    Path { path in
+                        path.move(to: CGPoint(x: 6 * scale, y: 0))
+                        path.addLine(to: CGPoint(x: 12 * scale, y: 12 * scale))
+                        path.addLine(to: CGPoint(x: 0, y: 12 * scale))
+                        path.closeSubpath()
+                    }
+                    .fill(item.primaryColor)
+                    .frame(width: 12 * scale, height: 12 * scale)
+                }
+            }
+            .offset(y: -8 * scale)
+            // Band
+            RoundedRectangle(cornerRadius: 2 * scale)
+                .fill(item.primaryColor)
+                .frame(width: 38 * scale, height: 8 * scale)
+            // Gems
+            HStack(spacing: 8 * scale) {
+                Circle().fill(item.accentColor).frame(width: 5 * scale)
+                Circle().fill(Color.blue.opacity(0.8)).frame(width: 5 * scale)
+                Circle().fill(item.accentColor).frame(width: 5 * scale)
+            }
+            .offset(y: -2 * scale)
+        }
+        .frame(width: 38 * scale, height: 20 * scale)
+        .offset(y: -(33 + 10) * scale)
+    }
+
+    private func cowboyHat(_ item: CosmeticItem) -> some View {
+        ZStack(alignment: .bottom) {
+            // Dome
+            Ellipse()
+                .fill(item.primaryColor)
+                .frame(width: 30 * scale, height: 18 * scale)
+                .offset(y: -8 * scale)
+            // Hat band
+            Rectangle()
+                .fill(item.accentColor)
+                .frame(width: 30 * scale, height: 3.5 * scale)
+                .offset(y: -8 * scale)
+            // Brim
+            Capsule()
+                .fill(item.primaryColor)
+                .frame(width: 50 * scale, height: 7 * scale)
+        }
+        .frame(width: 50 * scale, height: 25 * scale)
+        .offset(y: -(33 + 12.5) * scale)
+    }
+
+    private func chefHat(_ item: CosmeticItem) -> some View {
+        ZStack(alignment: .bottom) {
+            // Puffy dome
+            Ellipse()
+                .fill(item.primaryColor)
+                .frame(width: 28 * scale, height: 22 * scale)
+                .offset(y: -12 * scale)
+            // Cylinder body
+            Rectangle()
+                .fill(item.primaryColor)
+                .frame(width: 28 * scale, height: 14 * scale)
+            // Band
+            Rectangle()
+                .fill(item.accentColor)
+                .frame(width: 28 * scale, height: 5 * scale)
+        }
+        .frame(width: 28 * scale, height: 28 * scale)
+        .offset(y: -(33 + 14) * scale)
+    }
+
+    // MARK: - Glasses Cosmetics
+    // Eye centers: x = ±16*scale, y = -15*scale from ZStack center.
+
+    @ViewBuilder
+    private func glassesView(_ item: CosmeticItem) -> some View {
+        ZStack {
+            // Left lens
+            lensShape(item: item)
+                .offset(x: -16 * scale, y: -15 * scale)
+            // Right lens
+            lensShape(item: item)
+                .offset(x: 16 * scale, y: -15 * scale)
+            // Bridge
+            Rectangle()
+                .fill(item.primaryColor)
+                .frame(width: 10 * scale, height: 2 * scale)
+                .offset(y: -15 * scale)
+        }
+    }
+
+    @ViewBuilder
+    private func lensShape(item: CosmeticItem) -> some View {
+        switch item.id {
+        case "glasses_cool":
+            RoundedRectangle(cornerRadius: 3 * scale)
+                .fill(item.primaryColor.opacity(0.72))
+                .frame(width: 17 * scale, height: 11 * scale)
+        case "glasses_heart":
+            ZStack {
+                Circle()
+                    .fill(item.primaryColor.opacity(0.65))
+                    .frame(width: 16 * scale, height: 16 * scale)
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 7 * scale))
+                    .foregroundStyle(Color.white.opacity(0.55))
+            }
+        case "glasses_star":
+            ZStack {
+                Circle()
+                    .fill(item.primaryColor.opacity(0.20))
+                    .frame(width: 16 * scale, height: 16 * scale)
+                Circle()
+                    .stroke(item.primaryColor, lineWidth: 2 * scale)
+                    .frame(width: 16 * scale, height: 16 * scale)
+                Image(systemName: "star.fill")
+                    .font(.system(size: 7 * scale))
+                    .foregroundStyle(item.primaryColor)
+            }
+        default:
+            Circle()
+                .stroke(item.primaryColor, lineWidth: 2 * scale)
+                .frame(width: 16 * scale, height: 16 * scale)
+        }
+    }
+}
+
+// MARK: - Previews
+
+#Preview("All Moods") {
+    VStack(spacing: 20) {
+        HStack(spacing: 24) {
+            AvatarView(avatar: .allAvatars[0], mood: .happy, size: 90)
+            AvatarView(avatar: .allAvatars[2], mood: .sad, size: 90)
+            AvatarView(avatar: .allAvatars[4], mood: .hungry, size: 90)
+        }
+        HStack(spacing: 24) {
+            AvatarView(avatar: .allAvatars[6], mood: .freezing, size: 90)
+            AvatarView(avatar: .allAvatars[1], mood: .dramatic, size: 90)
+            AvatarView(avatar: .allAvatars[3], mood: .cozy, size: 90)
+        }
+    }
+    .padding(24)
+    .background(Color(red: 0.98, green: 0.96, blue: 0.92))
+}
+
+#Preview("Cosmetics") {
+    HStack(spacing: 20) {
+        AvatarView(avatar: .allAvatars[0], mood: .happy, size: 90,
+                   cosmetics: .init(necklaceId: "necklace_rainbow", hatId: "hat_crown", glassesId: "glasses_star"))
+        AvatarView(avatar: .allAvatars[2], mood: .happy, size: 90,
+                   cosmetics: .init(necklaceId: "necklace_pink", hatId: "hat_party", glassesId: "glasses_heart"))
+        AvatarView(avatar: .allAvatars[4], mood: .happy, size: 90,
+                   cosmetics: .init(necklaceId: "necklace_blue", hatId: "hat_cowboy", glassesId: "glasses_cool"))
+    }
+    .padding(24)
+    .background(Color(red: 0.98, green: 0.96, blue: 0.92))
+}

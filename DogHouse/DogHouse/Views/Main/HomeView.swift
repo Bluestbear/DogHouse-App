@@ -1,0 +1,761 @@
+//
+//  HomeView.swift
+//  DogHouse
+//
+//  The main screen shows TWO separate sections:
+//
+//  TOP: My dog's status — Am I in the doghouse or the living room?
+//       Driven by doghouseService.myDoghouseEvent (where I am the receiver).
+//
+//  BOTTOM: Partner controls — Did I send my partner to the doghouse?
+//       Driven by doghouseService.partnerDoghouseEvent (where I am the sender).
+//       Shows "Let them out" or "Send to DogHouse" button.
+//
+
+import SwiftUI
+import Combine
+import FirebaseFirestore
+import WidgetKit
+
+struct HomeView: View {
+    @EnvironmentObject var authService: AuthService
+    @StateObject private var doghouseService = DoghouseService(userId: "mock_user", partnerId: "mock_partner")
+
+    @State private var showSendSheet = false
+    @State private var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var currentDate = Date()
+    @State private var showLevelUpToast = false
+    @State private var lastSeenLevel: RoomLevel = .bareBones
+    @State private var showSendAnimation = false
+    @State private var showReleaseAnimation = false
+    @State private var errorMessage: String?
+    @State private var showTasksSheet = false
+    @State private var coupleTasks: [CoupleTask] = []
+    @State private var coupleTasksLoaded = false
+    @State private var scenePageIndex = 0
+    @State private var showBellyRubToast = false
+    @State private var bellyRubSenderName = ""
+    @State private var isAwardingTreats = false
+
+    private let shopService = ShopService()
+
+    private var partnerName: String {
+        authService.partnerProfile?.displayName ?? "Partner"
+    }
+
+    private var myAvatarId: String {
+        authService.userProfile?.avatarId ?? "dog_1"
+    }
+
+    private var partnerAvatarId: String {
+        authService.partnerProfile?.avatarId ?? "dog_1"
+    }
+
+    private var myCosmetics: AvatarCosmetics {
+        authService.userProfile?.cosmetics ?? .none
+    }
+
+    private var partnerCosmetics: AvatarCosmetics {
+        authService.partnerProfile?.cosmetics ?? .none
+    }
+
+    /// Time since I was last released (drives my room progression)
+    private var timeSinceMyRelease: TimeInterval {
+        doghouseService.timeSinceMyLastRelease()
+    }
+
+    private var currentRoomLevel: RoomLevel {
+        RoomLevel.level(for: timeSinceMyRelease)
+    }
+
+    private var partnerHasImmunity: Bool {
+        authService.partnerProfile?.hasImmunity ?? false
+    }
+
+    private var myGraceCharges: Int {
+        authService.userProfile?.effectiveGraceCharges ?? UserProfile.maxGraceCharges
+    }
+
+    private var partnerTimeSinceRelease: TimeInterval {
+        doghouseService.timeSincePartnerLastRelease()
+    }
+
+    private var partnerRoomLevel: RoomLevel {
+        RoomLevel.level(for: partnerTimeSinceRelease)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    // ==========================================
+                    // TOP SECTION: My own dog's status
+                    // ==========================================
+                    myStatusSection
+
+                    // ==========================================
+                    // BOTTOM SECTION: Partner controls
+                    // ==========================================
+                    partnerControlsSection
+                }
+                .padding(.top, 16)
+                .padding(.bottom, 32)
+            }
+            .navigationTitle("DogHouse")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showTasksSheet = true
+                    } label: {
+                        Label("Your Tasks", systemImage: "list.clipboard")
+                    }
+                }
+            }
+            .sheet(isPresented: $showTasksSheet) {
+                TasksSheetView()
+                    .environmentObject(authService)
+            }
+            .onReceive(timer) { date in
+                currentDate = date
+                checkForLevelUp()
+                maybeAwardTreats()
+            }
+            .animation(.spring(duration: 0.5), value: doghouseService.myDoghouseEvent?.id)
+            .animation(.spring(duration: 0.5), value: doghouseService.partnerDoghouseEvent?.id)
+            .overlay(alignment: .top) {
+                VStack(spacing: 8) {
+                    if showBellyRubToast {
+                        bellyRubReceivedToast
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    if showLevelUpToast {
+                        levelUpToast
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .zIndex(10)
+                .padding(.top, 8)
+            }
+            .onChange(of: doghouseService.receivedBellyRub) { _, senderName in
+                guard let senderName else { return }
+                bellyRubSenderName = senderName
+                HapticService.shared.success()
+                withAnimation(.spring(duration: 0.4)) { showBellyRubToast = true }
+                Task {
+                    try? await Task.sleep(for: .seconds(3))
+                    withAnimation { showBellyRubToast = false }
+                    doghouseService.receivedBellyRub = nil
+                }
+            }
+            .task { writeWidgetState() }
+            .onChange(of: doghouseService.iAmInDoghouse) { writeWidgetState() }
+            .onChange(of: doghouseService.partnerIsInDoghouse) { writeWidgetState() }
+            .onChange(of: authService.userProfile?.avatarId) { writeWidgetState() }
+            .onChange(of: authService.partnerProfile?.avatarId) { writeWidgetState() }
+        }
+        .errorBanner($errorMessage)
+        .sheet(isPresented: $showSendSheet) {
+            SendToDoghouseSheet(doghouseService: doghouseService, partnerName: partnerName, onSent: {
+                showSendAnimation = true
+            })
+            .presentationDetents([.large])
+        }
+        .overlay {
+            if showSendAnimation {
+                SendToDogHouseAnimation {
+                    showSendAnimation = false
+                }
+                .zIndex(100)
+            }
+            if showReleaseAnimation {
+                ReleaseFromDogHouseAnimation {
+                    showReleaseAnimation = false
+                }
+                .zIndex(100)
+            }
+        }
+    }
+
+    // MARK: - My Status Section (TOP)
+    // Swipeable scene window: page 0 = my placement, page 1 = partner's placement.
+    // The info card below always reflects my own status.
+
+    @ViewBuilder
+    private var myStatusSection: some View {
+        TabView(selection: $scenePageIndex) {
+            mySceneView
+                .tag(0)
+            partnerSceneView
+                .tag(1)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(height: 320)
+
+        // Page indicator: name labels flanking the dots
+        HStack(spacing: 8) {
+            Spacer()
+            Text(authService.userProfile?.displayName ?? "You")
+                .font(.dhCaption)
+                .foregroundStyle(scenePageIndex == 0 ? Color.primary : Color.secondary)
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(scenePageIndex == 0 ? Color.primary : Color(.systemGray4))
+                    .frame(width: 7, height: 7)
+                Circle()
+                    .fill(scenePageIndex == 1 ? Color.primary : Color(.systemGray4))
+                    .frame(width: 7, height: 7)
+            }
+            Text(partnerName)
+                .font(.dhCaption)
+                .foregroundStyle(scenePageIndex == 1 ? Color.primary : Color.secondary)
+            Spacer()
+        }
+        .animation(.easeInOut(duration: 0.2), value: scenePageIndex)
+
+        // Info card — always shows my own status data
+        if let myEvent = doghouseService.myDoghouseEvent {
+            myDoghouseInfoCard(event: myEvent)
+        } else {
+            myLivingRoomInfoSection
+        }
+    }
+
+    // MARK: My Scene (just the visual scene for me)
+
+    @ViewBuilder
+    private var mySceneView: some View {
+        if let myEvent = doghouseService.myDoghouseEvent {
+            DoghouseScene(
+                isCurrentUser: true,
+                partnerName: authService.userProfile?.displayName ?? "You",
+                duration: currentDate.timeIntervalSince(myEvent.startedAt),
+                avatarId: myAvatarId,
+                cosmetics: myCosmetics
+            )
+        } else {
+            LivingRoomScene(
+                partnerName: authService.userProfile?.displayName ?? "You",
+                isCurrentUser: true,
+                level: currentRoomLevel,
+                avatarId: myAvatarId,
+                cosmetics: myCosmetics
+            )
+        }
+    }
+
+    // MARK: Partner Scene (visible by swiping left)
+
+    @ViewBuilder
+    private var partnerSceneView: some View {
+        if let partnerEvent = doghouseService.partnerDoghouseEvent {
+            DoghouseScene(
+                isCurrentUser: false,
+                partnerName: partnerName,
+                duration: currentDate.timeIntervalSince(partnerEvent.startedAt),
+                avatarId: partnerAvatarId,
+                cosmetics: partnerCosmetics,
+                onBellyRub: handleBellyRubSend
+            )
+        } else {
+            LivingRoomScene(
+                partnerName: partnerName,
+                isCurrentUser: false,
+                level: partnerRoomLevel,
+                avatarId: partnerAvatarId,
+                cosmetics: partnerCosmetics,
+                onBellyRub: handleBellyRubSend
+            )
+        }
+    }
+
+    private func handleBellyRubSend() {
+        HapticService.shared.success()
+        Task {
+            let name = authService.userProfile?.displayName ?? "Partner"
+            try? await doghouseService.sendBellyRub(fromDisplayName: name)
+        }
+    }
+
+    // MARK: My Living Room Info (I'm home)
+
+    @ViewBuilder
+    private var myLivingRoomInfoSection: some View {
+        RoomProgressBar(
+            level: currentRoomLevel,
+            timeSinceRelease: timeSinceMyRelease
+        )
+
+        VStack(spacing: 4) {
+            Text("You've been home for:")
+                .font(.dhCaption)
+                .foregroundStyle(.secondary)
+            Text(timeSinceMyRelease.formattedTimer)
+                .font(.dhTimer)
+                .foregroundStyle(Color.freedomGreen)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("You've been home for \(timeSinceMyRelease.formattedDuration)")
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: My Doghouse Info Card (I'm sent to the doghouse)
+
+    @ViewBuilder
+    private func myDoghouseInfoCard(event: DoghouseEvent) -> some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 4) {
+                Text("You've been sent to the DogHouse!")
+                    .font(.dhTitle)
+                    .multilineTextAlignment(.center)
+
+                Text(currentDate.timeIntervalSince(event.startedAt).formattedTimer)
+                    .font(.dhTimer)
+                    .foregroundStyle(.red)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Reason", systemImage: "text.quote")
+                    .font(.dhCaptionBold)
+                    .foregroundStyle(.secondary)
+                Text(event.reason)
+                    .font(.dhBody)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.systemGray5))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 12) {
+                Label("How to get out:", systemImage: "lightbulb.fill")
+                    .font(.dhCaptionBold)
+                    .foregroundStyle(Color.cozyOrange)
+
+                HStack(spacing: 10) {
+                    Image(systemName: "clock.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Wait it out")
+                            .font(.dhBodyBold)
+                        Text("Stay here until \(partnerName) lets you out")
+                            .font(.dhCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(10)
+                .background(Color(.systemGray5))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                if coupleTasks.isEmpty && coupleTasksLoaded {
+                    Button {
+                        showTasksSheet = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "list.clipboard.fill")
+                                .foregroundStyle(Color.cozyOrange)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Do a Task")
+                                    .font(.dhBodyBold)
+                                Text("No tasks set up yet — tap to propose tasks!")
+                                    .font(.dhCaption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(10)
+                        .background(Color.cozyOrange.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                } else if !coupleTasks.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "list.clipboard.fill")
+                                .foregroundStyle(Color.cozyOrange)
+                                .frame(width: 28)
+                            Text("Do a Task")
+                                .font(.dhBodyBold)
+                            Spacer()
+                        }
+
+                        ForEach(coupleTasks) { task in
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(Color.cozyOrange)
+                                    .frame(width: 6, height: 6)
+                                Text(task.title)
+                                    .font(.dhBody)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(Color.cozyOrange.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 20)
+        .task { await loadCoupleTasks() }
+    }
+
+    // MARK: - Load Couple Tasks
+
+    private func loadCoupleTasks() async {
+        guard !coupleTasksLoaded,
+              let userId = authService.userProfile?.id,
+              let partnerId = authService.userProfile?.partnerId,
+              partnerId != "skipped" else { return }
+
+        let fs = FirebaseService.shared
+        let key = fs.coupleKey(userId1: userId, userId2: partnerId)
+
+        do {
+            let doc = try await fs.coupleTasksCollection.document(key).getDocument()
+            if doc.exists, let data = doc.data(),
+               let tasksArray = data["tasks"] as? [[String: Any]] {
+                coupleTasks = tasksArray.compactMap { dict in
+                    guard let id = dict["id"] as? String,
+                          let title = dict["title"] as? String,
+                          let suggestedBy = dict["suggestedBy"] as? String,
+                          let isApp = dict["isAppSuggestion"] as? Bool else { return nil }
+                    return CoupleTask(id: id, title: title, suggestedBy: suggestedBy, isAppSuggestion: isApp)
+                }
+            }
+        } catch {
+            print("Failed to load couple tasks: \(error)")
+        }
+
+        coupleTasksLoaded = true
+    }
+
+    // MARK: - Partner Controls Section (BOTTOM)
+    // Shows either:
+    //   A) "Partner is in the doghouse" card with release button (if I sent them)
+    //   B) "Send to DogHouse" button (if partner is free)
+
+    @ViewBuilder
+    private var partnerControlsSection: some View {
+        // Divider between my status and partner controls
+        HStack {
+            Rectangle()
+                .fill(Color(.systemGray4))
+                .frame(height: 1)
+            Text(partnerName)
+                .font(.dhCaptionBold)
+                .foregroundStyle(.secondary)
+            Rectangle()
+                .fill(Color(.systemGray4))
+                .frame(height: 1)
+        }
+        .padding(.horizontal, 24)
+
+        if let partnerEvent = doghouseService.partnerDoghouseEvent {
+            // I sent my partner to the doghouse — show their status + release button
+            partnerInDoghouseCard(event: partnerEvent)
+        } else {
+            // My partner is NOT in the doghouse — show send button
+            partnerFreeSection
+        }
+    }
+
+    // MARK: Partner In Doghouse Card
+
+    @ViewBuilder
+    private func partnerInDoghouseCard(event: DoghouseEvent) -> some View {
+        VStack(spacing: 12) {
+            // Partner's avatar + status
+            HStack(spacing: 12) {
+                AvatarView(
+                    avatar: DogAvatar.avatar(for: partnerAvatarId),
+                    mood: .sad,
+                    size: 56,
+                    cosmetics: partnerCosmetics
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(partnerName) is in the DogHouse")
+                        .font(.dhBodyBold)
+                        .foregroundStyle(.red)
+                    Text("Sent \(currentDate.timeIntervalSince(event.startedAt).formattedDuration) ago")
+                        .font(.dhCaption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            // Reason
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Reason: \(event.reason)")
+                    .font(.dhCaption)
+                    .foregroundStyle(.secondary)
+                if let suggestion = event.suggestion {
+                    Text("To get out: \(suggestion)")
+                        .font(.dhCaption)
+                        .foregroundStyle(Color.cozyOrange)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Release button
+            Button {
+                showReleaseAnimation = true
+                Task {
+                    do {
+                        try await doghouseService.releasePartner()
+                        SoundService.shared.playRelease()
+                    } catch {
+                        errorMessage = "Failed to release: \(error.localizedDescription)"
+                    }
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "lock.open.fill")
+                    Text("Let \(partnerName) Out 🏠")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.freedomGreen)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .accessibilityLabel("Release \(partnerName) from the doghouse")
+        }
+        .padding(16)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: Partner Free — Send Button
+
+    @ViewBuilder
+    private var partnerFreeSection: some View {
+        // Partner info bar
+        if let partner = authService.partnerProfile {
+            HStack(spacing: 12) {
+                AvatarView(
+                    avatar: DogAvatar.avatar(for: partner.avatarId ?? "dog_1"),
+                    mood: .happy,
+                    size: 52,
+                    cosmetics: partnerCosmetics
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(partner.displayName)
+                        .font(.dhBodyBold)
+                    Text("Home sweet home")
+                        .font(.dhCaption)
+                        .foregroundStyle(Color.freedomGreen)
+                }
+
+                Spacer()
+
+                if partner.hasImmunity {
+                    Label("Immune", systemImage: "shield.fill")
+                        .font(.dhBadge)
+                        .foregroundStyle(.blue)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.blue.opacity(0.1))
+                        .clipShape(Capsule())
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 20)
+        }
+
+        // Grace meter
+        graceMeterView
+
+        // Immunity banner
+        if let partner = authService.partnerProfile, partner.hasImmunity,
+           let immunityEnd = partner.immunityUntil {
+            HStack(spacing: 8) {
+                Image(systemName: "shield.fill")
+                    .foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(partnerName) has immunity!")
+                        .font(.dhCaptionBold)
+                    Text("Expires in \(immunityEnd.timeIntervalSince(currentDate).formattedDuration)")
+                        .font(.dhCaption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(Color.blue.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 20)
+        }
+
+        // Send to doghouse button
+        Button {
+            showSendSheet = true
+        } label: {
+            HStack {
+                Image(systemName: "house.fill")
+                Text("Send \(partnerName) to the DogHouse 🐕")
+            }
+            .font(.headline)
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(sendDisabled ? Color.gray.opacity(0.4) : Color.red)
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .disabled(sendDisabled)
+        .accessibilityLabel(sendDisabled
+            ? partnerHasImmunity
+                ? "\(partnerName) has immunity, cannot send to doghouse"
+                : "No grace charges remaining"
+            : "Send \(partnerName) to the doghouse")
+        .padding(.horizontal, 20)
+    }
+
+    private var sendDisabled: Bool {
+        partnerHasImmunity || myGraceCharges <= 0
+    }
+
+    // MARK: - Grace Meter
+
+    private var graceMeterView: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Image(systemName: "heart.circle.fill")
+                    .foregroundStyle(myGraceCharges > 0 ? Color.cozyOrange : .red)
+                Text("Grace")
+                    .font(.dhCaptionBold)
+                Spacer()
+                Text("\(myGraceCharges) / \(UserProfile.maxGraceCharges)")
+                    .font(.dhCaptionBold)
+                    .foregroundStyle(myGraceCharges > 0 ? Color.primary : Color.red)
+            }
+
+            // Charge pips
+            HStack(spacing: 6) {
+                ForEach(0..<UserProfile.maxGraceCharges, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(index < myGraceCharges ? Color.cozyOrange : Color(.systemGray4))
+                        .frame(height: 8)
+                }
+            }
+
+            if myGraceCharges < UserProfile.maxGraceCharges {
+                Text("Recharges 1 per day")
+                    .font(.dhCaption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - Level Up Detection
+
+    private func checkForLevelUp() {
+        // Only check level ups when I'm NOT in the doghouse
+        guard doghouseService.myDoghouseEvent == nil else { return }
+
+        let newLevel = currentRoomLevel
+        if newLevel.rawValue > lastSeenLevel.rawValue {
+            lastSeenLevel = newLevel
+            withAnimation(.spring(duration: 0.4)) {
+                showLevelUpToast = true
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                withAnimation {
+                    showLevelUpToast = false
+                }
+            }
+        }
+    }
+
+    // Awards 10 treats per complete hour the user spends at home (not in doghouse).
+    private func maybeAwardTreats() {
+        guard !isAwardingTreats,
+              doghouseService.myDoghouseEvent == nil,
+              let lastAward = authService.userProfile?.lastTreatAward else {
+            // If lastTreatAward is nil the user has never been awarded — kick off on first hour.
+            if !isAwardingTreats,
+               doghouseService.myDoghouseEvent == nil,
+               authService.userProfile?.lastTreatAward == nil,
+               timeSinceMyRelease >= 3600 {
+                isAwardingTreats = true
+                Task {
+                    try? await shopService.awardHomeTreats(lastAward: nil)
+                    isAwardingTreats = false
+                }
+            }
+            return
+        }
+        guard Date().timeIntervalSince(lastAward) >= 3600 else { return }
+        isAwardingTreats = true
+        Task {
+            try? await shopService.awardHomeTreats(lastAward: lastAward)
+            isAwardingTreats = false
+        }
+    }
+
+    private func writeWidgetState() {
+        let defaults = UserDefaults(suiteName: "group.com.harrisonkrampe.doghouse")
+        defaults?.set(authService.userProfile?.avatarId ?? "dog_1", forKey: "widget_myAvatarId")
+        defaults?.set(authService.partnerProfile?.avatarId ?? "dog_1", forKey: "widget_partnerAvatarId")
+        defaults?.set(doghouseService.iAmInDoghouse, forKey: "widget_myInDoghouse")
+        defaults?.set(doghouseService.partnerIsInDoghouse, forKey: "widget_partnerInDoghouse")
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    private var levelUpToast: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "star.fill")
+                .foregroundStyle(.yellow)
+            Text("\(currentRoomLevel.unlockMessage)")
+                .font(.dhCaptionBold)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .shadow(radius: 4)
+    }
+
+    private var bellyRubReceivedToast: some View {
+        HStack(spacing: 8) {
+            Text("🐾")
+            Text("\(bellyRubSenderName) gave you a belly rub!")
+                .font(.dhCaptionBold)
+            Text("❤️")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .shadow(radius: 4)
+    }
+}
+
+#Preview("Living Room") {
+    HomeView()
+        .environmentObject(AuthService())
+}
