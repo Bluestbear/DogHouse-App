@@ -145,7 +145,7 @@ export const onDoghouseEvent = onDocumentWritten(
       } else if (after.releasedBy === "redemption") {
         // Redemption confirmed — reward the dog with treats (server-side;
         // clients can only write their own user document)
-        const treatReward = 25;
+        const treatReward = 15;
         await db.collection("users").doc(receiverId).update({
           treats: FieldValue.increment(treatReward),
         });

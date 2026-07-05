@@ -14,6 +14,8 @@ enum RoomLevel: Int, CaseIterable {
     case tvAndArt = 6
     case plantsAndBooks = 7
     case luxury = 8
+    case penthouse = 9
+    case palace = 10
 
     var name: String {
         switch self {
@@ -25,6 +27,8 @@ enum RoomLevel: Int, CaseIterable {
         case .tvAndArt: "Home Sweet Home"
         case .plantsAndBooks: "Living the Dream"
         case .luxury: "VIP Lounge"
+        case .penthouse: "Penthouse Vibes"
+        case .palace: "Dog Palace"
         }
     }
 
@@ -38,6 +42,8 @@ enum RoomLevel: Int, CaseIterable {
         case .tvAndArt: "TV & wall art!"
         case .plantsAndBooks: "Plants & bookshelves!"
         case .luxury: "Full luxury! VIP status!"
+        case .penthouse: "Penthouse! Aquarium & sunset views!"
+        case .palace: "DOG PALACE! Pure royalty 👑"
         }
     }
 
@@ -52,6 +58,20 @@ enum RoomLevel: Int, CaseIterable {
         case .tvAndArt: 604800              // 7 days
         case .plantsAndBooks: 1209600       // 14 days
         case .luxury: 2592000               // 30 days
+        case .penthouse: 5184000            // 60 days
+        case .palace: 7776000               // 90 days
+        }
+    }
+
+    /// Treats earned per hour at home — grows with room level, so a
+    /// doghouse stint (which resets the room) also craters your income.
+    var treatsPerHour: Int {
+        switch self {
+        case .bareBones, .basicChair: 1
+        case .blanket, .pillowAndRug: 2
+        case .fireplace, .tvAndArt: 3
+        case .plantsAndBooks, .luxury: 4
+        case .penthouse, .palace: 5
         }
     }
 
@@ -89,4 +109,10 @@ enum RoomLevel: Int, CaseIterable {
     var hasPlants: Bool { rawValue >= 7 }
     var hasBookshelf: Bool { rawValue >= 7 }
     var hasLuxury: Bool { rawValue >= 8 }
+    var hasAquarium: Bool { rawValue >= 9 }
+    var hasFloorLamp: Bool { rawValue >= 9 }
+    var hasSunsetWindow: Bool { rawValue >= 9 }
+    var hasRedCarpet: Bool { rawValue >= 10 }
+    var hasGoldStatue: Bool { rawValue >= 10 }
+    var hasBanner: Bool { rawValue >= 10 }
 }

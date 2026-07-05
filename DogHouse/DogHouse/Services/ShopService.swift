@@ -53,13 +53,13 @@ class ShopService {
 
     /// Awards 10 treats for each complete hour spent at home since lastTreatAward.
     /// Idempotent: only runs if at least one hour has elapsed.
-    func awardHomeTreats(lastAward: Date?) async throws {
+    func awardHomeTreats(lastAward: Date?, treatsPerHour: Int) async throws {
         guard let uid = userId else { return }
         let now = Date()
         let since = lastAward ?? now.addingTimeInterval(-3600) // first time: award 1 hour
         let hoursElapsed = Int(now.timeIntervalSince(since) / 3600)
         guard hoursElapsed >= 1 else { return }
-        let amount = hoursElapsed * 10
+        let amount = hoursElapsed * treatsPerHour
         try await fs.usersCollection.document(uid).updateData([
             "treats": FieldValue.increment(Int64(amount)),
             "lastTreatAward": Timestamp(date: now)

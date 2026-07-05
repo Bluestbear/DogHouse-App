@@ -49,7 +49,7 @@ struct LivingRoomScene: View {
             VStack(spacing: 0) {
                 // Wall area
                 ZStack {
-                    // Arched window (upper left)
+                    // Arched window (upper left) — sunset view at penthouse level
                     windowView
                         .offset(x: -68, y: -2)
 
@@ -66,6 +66,13 @@ struct LivingRoomScene: View {
                             .offset(x: 58, y: 38)
                             .transition(.scale.combined(with: .opacity))
                     }
+
+                    // Royal banner (level 10)
+                    if level.hasBanner {
+                        royalBannerView
+                            .offset(x: 0, y: -34)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
                 .frame(height: 100)
 
@@ -73,6 +80,13 @@ struct LivingRoomScene: View {
 
                 // Main floor area
                 ZStack {
+                    // Red carpet (level 10) — sits under everything
+                    if level.hasRedCarpet {
+                        redCarpetView
+                            .offset(y: 30)
+                            .transition(.opacity)
+                    }
+
                     // Round cream rug (level 4+)
                     if level.hasRug {
                         Ellipse()
@@ -131,6 +145,27 @@ struct LivingRoomScene: View {
                             .transition(.move(edge: .leading).combined(with: .opacity))
                     }
 
+                    // Aquarium (level 9+)
+                    if level.hasAquarium {
+                        aquariumView
+                            .offset(x: 92, y: -18)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+
+                    // Floor lamp (level 9+)
+                    if level.hasFloorLamp {
+                        floorLampView
+                            .offset(x: -110, y: -12)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
+
+                    // Golden dog statue (level 10)
+                    if level.hasGoldStatue {
+                        goldStatueView
+                            .offset(x: 100, y: 28)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+
                     // Avatar (with belly rub gesture)
                     VStack(spacing: 4) {
                         ZStack {
@@ -156,7 +191,15 @@ struct LivingRoomScene: View {
                                 }
                         )
 
-                        if level.hasLuxury {
+                        if level.hasBanner {
+                            Text("👑 ROYALTY")
+                                .font(.dhBadge)
+                                .foregroundStyle(.yellow)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Capsule())
+                        } else if level.hasLuxury {
                             Text("VIP")
                                 .font(.dhBadge)
                                 .foregroundStyle(.yellow)
@@ -246,23 +289,27 @@ struct LivingRoomScene: View {
                 .fill(Color(red: 0.72, green: 0.55, blue: 0.38))
                 .frame(width: 72, height: 76)
 
-            // Sky interior
+            // Sky interior — golden sunset at penthouse level
             ArchShape()
                 .fill(
                     LinearGradient(
-                        colors: [Color(red: 0.52, green: 0.80, blue: 0.97), Color(red: 0.76, green: 0.91, blue: 0.99)],
+                        colors: level.hasSunsetWindow
+                            ? [Color(red: 0.98, green: 0.68, blue: 0.38), Color(red: 0.95, green: 0.48, blue: 0.42)]
+                            : [Color(red: 0.52, green: 0.80, blue: 0.97), Color(red: 0.76, green: 0.91, blue: 0.99)],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
                 .frame(width: 62, height: 66)
 
-            // Sun
+            // Sun — low and warm at sunset
             Circle()
-                .fill(Color(red: 1.0, green: 0.88, blue: 0.22))
-                .shadow(color: Color(red: 1.0, green: 0.88, blue: 0.22).opacity(0.5), radius: 6)
-                .frame(width: 16, height: 16)
-                .offset(x: 12, y: -18)
+                .fill(level.hasSunsetWindow
+                      ? Color(red: 1.0, green: 0.72, blue: 0.30)
+                      : Color(red: 1.0, green: 0.88, blue: 0.22))
+                .shadow(color: Color(red: 1.0, green: 0.80, blue: 0.25).opacity(0.6), radius: 6)
+                .frame(width: level.hasSunsetWindow ? 20 : 16, height: level.hasSunsetWindow ? 20 : 16)
+                .offset(x: 12, y: level.hasSunsetWindow ? 4 : -18)
 
             // Cloud 1
             cloudShape
@@ -506,6 +553,197 @@ struct LivingRoomScene: View {
     }
 }
 
+// MARK: - Penthouse & Palace Assets
+
+extension LivingRoomScene {
+
+    // Aquarium on a stand (level 9+)
+    var aquariumView: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                // Tank
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(red: 0.45, green: 0.72, blue: 0.92).opacity(0.85),
+                                     Color(red: 0.30, green: 0.55, blue: 0.82).opacity(0.9)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 46, height: 32)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color(red: 0.35, green: 0.30, blue: 0.25), lineWidth: 2)
+                    )
+
+                // Fish
+                Text("🐠")
+                    .font(.system(size: 11))
+                    .offset(x: -8, y: -2)
+                Text("🐟")
+                    .font(.system(size: 9))
+                    .offset(x: 9, y: 5)
+
+                // Bubbles
+                Circle().fill(Color.white.opacity(0.6)).frame(width: 3, height: 3).offset(x: 14, y: -8)
+                Circle().fill(Color.white.opacity(0.5)).frame(width: 2, height: 2).offset(x: 16, y: -3)
+
+                // Seaweed
+                Path { p in
+                    p.move(to: CGPoint(x: 8, y: 30))
+                    p.addQuadCurve(to: CGPoint(x: 6, y: 18), control: CGPoint(x: 12, y: 24))
+                }
+                .stroke(Color(red: 0.25, green: 0.60, blue: 0.35), lineWidth: 2)
+            }
+
+            // Stand
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color(red: 0.50, green: 0.36, blue: 0.22))
+                .frame(width: 50, height: 8)
+        }
+    }
+
+    // Floor lamp with warm glow (level 9+)
+    var floorLampView: some View {
+        VStack(spacing: 0) {
+            // Shade
+            UnevenRoundedRectangle(
+                topLeadingRadius: 4,
+                bottomLeadingRadius: 10,
+                bottomTrailingRadius: 10,
+                topTrailingRadius: 4
+            )
+            .fill(Color(red: 0.96, green: 0.87, blue: 0.68))
+            .frame(width: 26, height: 18)
+            .shadow(color: Color.yellow.opacity(0.45), radius: 9, y: 4)
+
+            // Pole
+            Rectangle()
+                .fill(Color(red: 0.40, green: 0.34, blue: 0.28))
+                .frame(width: 3, height: 34)
+
+            // Base
+            Capsule()
+                .fill(Color(red: 0.40, green: 0.34, blue: 0.28))
+                .frame(width: 20, height: 5)
+        }
+    }
+
+    // Golden dog statue on a pedestal (level 10)
+    var goldStatueView: some View {
+        VStack(spacing: 0) {
+            // Golden dog (sitting silhouette built from shapes)
+            ZStack {
+                // Body
+                Ellipse()
+                    .fill(goldGradient)
+                    .frame(width: 16, height: 20)
+                    .offset(y: 5)
+                // Head
+                Circle()
+                    .fill(goldGradient)
+                    .frame(width: 12, height: 12)
+                    .offset(y: -7)
+                // Ear
+                Ellipse()
+                    .fill(goldGradient)
+                    .frame(width: 5, height: 8)
+                    .rotationEffect(.degrees(-24))
+                    .offset(x: -5, y: -12)
+                Ellipse()
+                    .fill(goldGradient)
+                    .frame(width: 5, height: 8)
+                    .rotationEffect(.degrees(24))
+                    .offset(x: 5, y: -12)
+            }
+            .frame(width: 22, height: 32)
+            .shadow(color: Color.yellow.opacity(0.5), radius: 5)
+
+            // Pedestal
+            VStack(spacing: 0) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color(red: 0.85, green: 0.72, blue: 0.38))
+                    .frame(width: 26, height: 4)
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color(red: 0.75, green: 0.62, blue: 0.30))
+                    .frame(width: 20, height: 10)
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color(red: 0.85, green: 0.72, blue: 0.38))
+                    .frame(width: 30, height: 5)
+            }
+        }
+    }
+
+    private var goldGradient: LinearGradient {
+        LinearGradient(
+            colors: [Color(red: 1.0, green: 0.85, blue: 0.35), Color(red: 0.85, green: 0.65, blue: 0.18)],
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        )
+    }
+
+    // Red carpet runner (level 10)
+    var redCarpetView: some View {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 3,
+            bottomLeadingRadius: 3,
+            bottomTrailingRadius: 3,
+            topTrailingRadius: 3
+        )
+        .fill(
+            LinearGradient(
+                colors: [Color(red: 0.72, green: 0.12, blue: 0.16), Color(red: 0.58, green: 0.08, blue: 0.12)],
+                startPoint: .top, endPoint: .bottom
+            )
+        )
+        .frame(width: 230, height: 34)
+        .overlay(
+            RoundedRectangle(cornerRadius: 3)
+                .stroke(Color(red: 0.92, green: 0.78, blue: 0.35), lineWidth: 1.5)
+                .frame(width: 222, height: 26)
+        )
+    }
+
+    // Hanging royal banner (level 10)
+    var royalBannerView: some View {
+        VStack(spacing: 0) {
+            // Rod
+            Capsule()
+                .fill(Color(red: 0.85, green: 0.70, blue: 0.32))
+                .frame(width: 56, height: 3)
+
+            // Banner cloth with notched bottom
+            ZStack {
+                BannerShape()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(red: 0.65, green: 0.12, blue: 0.18), Color(red: 0.50, green: 0.08, blue: 0.14)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 44, height: 34)
+
+                Text("🐕")
+                    .font(.system(size: 13))
+                    .offset(y: -4)
+            }
+        }
+    }
+}
+
+// Banner with a triangular notch cut from the bottom
+private struct BannerShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: .zero)
+        p.addLine(to: CGPoint(x: rect.width, y: 0))
+        p.addLine(to: CGPoint(x: rect.width, y: rect.height))
+        p.addLine(to: CGPoint(x: rect.width / 2, y: rect.height * 0.72))
+        p.addLine(to: CGPoint(x: 0, y: rect.height))
+        p.closeSubpath()
+        return p
+    }
+}
+
 // MARK: - Heart Burst Particle View (shared by Living Room and Doghouse scenes)
 
 struct HeartBurstView: View {
@@ -548,4 +786,12 @@ struct HeartBurstView: View {
 
 #Preview("Level 8 - Luxury") {
     LivingRoomScene(partnerName: "Alex", isCurrentUser: false, level: .luxury)
+}
+
+#Preview("Level 9 - Penthouse") {
+    LivingRoomScene(partnerName: "Alex", isCurrentUser: false, level: .penthouse)
+}
+
+#Preview("Level 10 - Palace") {
+    LivingRoomScene(partnerName: "Alex", isCurrentUser: false, level: .palace)
 }

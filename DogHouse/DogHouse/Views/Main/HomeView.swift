@@ -824,7 +824,7 @@ struct HomeView: View {
         }
     }
 
-    // Awards 10 treats per complete hour the user spends at home (not in doghouse).
+    // Awards treats per complete hour at home, scaled by room level (1-5/hr).
     private func maybeAwardTreats() {
         guard !isAwardingTreats,
               doghouseService.myDoghouseEvent == nil,
@@ -836,7 +836,7 @@ struct HomeView: View {
                timeSinceMyRelease >= 3600 {
                 isAwardingTreats = true
                 Task {
-                    try? await shopService.awardHomeTreats(lastAward: nil)
+                    try? await shopService.awardHomeTreats(lastAward: nil, treatsPerHour: currentRoomLevel.treatsPerHour)
                     isAwardingTreats = false
                 }
             }
@@ -845,7 +845,7 @@ struct HomeView: View {
         guard Date().timeIntervalSince(lastAward) >= 3600 else { return }
         isAwardingTreats = true
         Task {
-            try? await shopService.awardHomeTreats(lastAward: lastAward)
+            try? await shopService.awardHomeTreats(lastAward: lastAward, treatsPerHour: currentRoomLevel.treatsPerHour)
             isAwardingTreats = false
         }
     }
