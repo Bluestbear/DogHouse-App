@@ -8,27 +8,24 @@ import SwiftUI
 struct MainTabView: View {
     @EnvironmentObject var authService: AuthService
     @StateObject private var notificationService = NotificationService.shared
+    // One challenge service shared by Home (games) and Profile (anniversary)
+    @StateObject private var challengeService = ChallengeService(userId: "mock_user", partnerId: "mock_partner")
     @State private var selectedTab: AppTab = .home
     @State private var showPermissionExplainer = false
 
     enum AppTab: Hashable {
-        case home, friends, play, shop, profile
+        case home, friends, shop, profile
     }
 
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab("Home", systemImage: "house.fill", value: AppTab.home) {
-                HomeView()
+                HomeView(challengeService: challengeService)
                     .environmentObject(authService)
             }
 
             Tab("Friends", systemImage: "person.2.fill", value: AppTab.friends) {
                 FriendsTabView()
-                    .environmentObject(authService)
-            }
-
-            Tab("Play", systemImage: "gamecontroller.fill", value: AppTab.play) {
-                PlayTabView()
                     .environmentObject(authService)
             }
 
@@ -38,7 +35,7 @@ struct MainTabView: View {
             }
 
             Tab("Profile", systemImage: "person.crop.circle.fill", value: AppTab.profile) {
-                ProfileTabView()
+                ProfileTabView(challengeService: challengeService)
                     .environmentObject(authService)
             }
         }
@@ -49,7 +46,6 @@ struct MainTabView: View {
             switch destination {
             case .home: selectedTab = .home
             case .friends: selectedTab = .friends
-            case .play: selectedTab = .play
             }
             notificationService.pendingDestination = nil
         }

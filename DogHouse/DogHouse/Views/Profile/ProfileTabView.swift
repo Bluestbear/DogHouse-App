@@ -8,6 +8,9 @@ import SwiftUI
 struct ProfileTabView: View {
     @EnvironmentObject var authService: AuthService
     @StateObject private var doghouseService = DoghouseService(userId: "mock_user", partnerId: "mock_partner")
+    @ObservedObject var challengeService: ChallengeService
+    @State private var showAnniversaryPicker = false
+    @State private var anniversaryDraft = Date()
     @State private var showAvatarPicker = false
     @State private var showSignOutAlert = false
     @State private var showDeleteAlert = false
@@ -33,6 +36,9 @@ struct ProfileTabView: View {
 
                 // Relationship
                 relationshipSection
+
+                // Anniversary
+                anniversarySection
 
                 // Settings
                 settingsSection
@@ -68,6 +74,9 @@ struct ProfileTabView: View {
             .sheet(isPresented: $showRepairSheet) {
                 PairingView()
                     .environmentObject(authService)
+            }
+            .sheet(isPresented: $showAnniversaryPicker) {
+                anniversaryPickerSheet
             }
             .errorBanner($unpairError)
         }
@@ -189,6 +198,62 @@ struct ProfileTabView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Anniversary
+
+    private var anniversarySection: some View {
+        Section("Anniversary") {
+            if let anniversary = challengeService.anniversary {
+                HStack {
+                    Label(anniversary.formatted(.dateTime.month(.wide).day()), systemImage: "heart.circle.fill")
+                        .foregroundStyle(Color.cozyOrange)
+                    Spacer()
+                    Button("Edit") {
+                        anniversaryDraft = anniversary
+                        showAnniversaryPicker = true
+                    }
+                    .font(.caption)
+                }
+            } else {
+                Button {
+                    showAnniversaryPicker = true
+                } label: {
+                    Label("Set your anniversary", systemImage: "heart.circle")
+                        .foregroundStyle(Color.cozyOrange)
+                }
+            }
+        }
+    }
+
+    private var anniversaryPickerSheet: some View {
+        NavigationStack {
+            Form {
+                DatePicker("Anniversary date", selection: $anniversaryDraft, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+            }
+            .navigationTitle("Your Anniversary")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showAnniversaryPicker = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task {
+                            do {
+                                try await challengeService.setAnniversary(anniversaryDraft)
+                                showAnniversaryPicker = false
+                            } catch {
+                                unpairError = error.localizedDescription
+                                showAnniversaryPicker = false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: - Settings
@@ -340,6 +405,6 @@ struct StatRow: View {
 }
 
 #Preview {
-    ProfileTabView()
+    ProfileTabView(challengeService: ChallengeService(userId: "mock_user", partnerId: "mock_partner"))
         .environmentObject(AuthService())
 }

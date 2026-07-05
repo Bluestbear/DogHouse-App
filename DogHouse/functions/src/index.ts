@@ -1041,3 +1041,52 @@ export const redeemWishCard = onCall({ region: REGION }, async (req) => {
   await batch.commit();
   return { ok: true, cardsRemaining: cards - 1 };
 });
+
+// ─────────────────────────────────────────────────────────────
+// 12. Random photo dash — the app itself starts these. Runs a few
+//     times a day; each active couple has a small chance to get one.
+//     First partner to send a photo wins a Whatever-I-Want card.
+// ─────────────────────────────────────────────────────────────
+const PHOTO_DASH_PROMPTS = [
+  "First to send a selfie wins! 🤳",
+  "First to send a pic of what you're doing right now 📸",
+  "First to send a photo of something that reminds you of them ❤️",
+  "First to send your best silly face 🤪",
+  "First to send the view from where you are 🪟",
+];
+
+export const randomPhotoDash = onSchedule(
+  { schedule: "0 11,15,19 * * *", timeZone: "Europe/Berlin", region: REGION },
+  async () => {
+    // Gather paired users, dedupe into couples by coupleKey
+    const paired = await db.collection("users")
+      .where("partnerId", "!=", "skipped").get();
+    const couples = new Map<string, [string, string]>();
+    paired.forEach((doc) => {
+      const uid = doc.id;
+      const partnerId = doc.data().partnerId as string | undefined;
+      if (!partnerId || partnerId === "skipped") return;
+      couples.set(coupleKeyOf(uid, partnerId), [uid, partnerId]);
+    });
+
+    for (const [key, [a, b]] of couples) {
+      // ~35% chance per tick, and never stack with an active dash
+      if (Math.random() > 0.35) continue;
+      const existing = await db.collection("challenges")
+        .where("coupleKey", "==", key).where("type", "==", "photo")
+        .where("status", "==", "active").limit(1).get();
+      if (!existing.empty) continue;
+
+      const prompt = PHOTO_DASH_PROMPTS[Math.floor(Math.random() * PHOTO_DASH_PROMPTS.length)];
+      await db.collection("challenges").doc().set({
+        coupleKey: key, type: "photo", title: "Photo Dash", prompt,
+        createdBy: "system", participants: [a, b], status: "active",
+        createdAt: Timestamp.now(),
+      });
+      await notifyUsers([a, b], "📸 Photo Dash!",
+        `${prompt} First one to send wins a card 🎟️`,
+        { data: { type: "challenge" } });
+      logger.info(`[photoDash] Started for couple ${key}`);
+    }
+  }
+);

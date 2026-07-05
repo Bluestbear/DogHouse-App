@@ -16,13 +16,24 @@ import SwiftUI
 import Combine
 import FirebaseFirestore
 import WidgetKit
+import PhotosUI
+
+/// Which game sheet is presented from the Home "+" menu.
+enum GameSheet: Identifiable {
+    case createQuiz, pickQuiz, answerQuizzes, myCards
+    var id: Int { hashValue }
+}
 
 struct HomeView: View {
     @EnvironmentObject var authService: AuthService
     @StateObject private var doghouseService = DoghouseService(userId: "mock_user", partnerId: "mock_partner")
     @StateObject private var notificationService = NotificationService.shared
+    @ObservedObject var challengeService: ChallengeService
 
     @State private var showSendSheet = false
+    @State private var activeGameSheet: GameSheet?
+    @State private var photoPick: PhotosPickerItem?
+    @State private var isSubmittingPhoto = false
     @State private var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     @State private var currentDate = Date()
     @State private var showLevelUpToast = false
@@ -77,6 +88,10 @@ struct HomeView: View {
         authService.userProfile?.effectiveGraceCharges ?? UserProfile.maxGraceCharges
     }
 
+    private var myWishCards: Int {
+        authService.userProfile?.wishCards ?? 0
+    }
+
     private var partnerTimeSinceRelease: TimeInterval {
         doghouseService.timeSincePartnerLastRelease()
     }
@@ -92,6 +107,17 @@ struct HomeView: View {
                     // Notifications disabled — the app can't work without them
                     if notificationService.authStatus == .denied {
                         notificationsDeniedBanner
+                    }
+
+                    // Anniversary race — only on the day, until someone wins
+                    if challengeService.isAnniversaryToday,
+                       challengeService.anniversaryRaceResult == nil {
+                        anniversaryRaceBanner
+                    }
+
+                    // App-triggered photo dash — first to send a pic wins
+                    if let dash = challengeService.activePhotoDash {
+                        photoDashBanner(dash)
                     }
 
                     // ==========================================
@@ -116,10 +142,45 @@ struct HomeView: View {
                         Label("Your Tasks", systemImage: "list.clipboard")
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Section("Quizzes") {
+                            Button { activeGameSheet = .createQuiz } label: {
+                                Label("Create Quiz", systemImage: "square.and.pencil")
+                            }
+                            Button { activeGameSheet = .pickQuiz } label: {
+                                Label("Pick Quiz", systemImage: "list.bullet.rectangle")
+                            }
+                            if !challengeService.pendingQuizzes.isEmpty {
+                                Button { activeGameSheet = .answerQuizzes } label: {
+                                    Label("Answer Quizzes (\(challengeService.pendingQuizzes.count))",
+                                          systemImage: "questionmark.bubble")
+                                }
+                            }
+                        }
+                        Button { activeGameSheet = .myCards } label: {
+                            Label("My Cards (\(myWishCards))", systemImage: "ticket")
+                        }
+                    } label: {
+                        Label("Games", systemImage: "plus.circle")
+                    }
+                }
             }
             .sheet(isPresented: $showTasksSheet) {
                 TasksSheetView()
                     .environmentObject(authService)
+            }
+            .sheet(item: $activeGameSheet) { sheet in
+                switch sheet {
+                case .createQuiz:
+                    CreateQuizSheet(challengeService: challengeService, partnerName: partnerName)
+                case .pickQuiz:
+                    PickQuizSheet(challengeService: challengeService, partnerName: partnerName)
+                case .answerQuizzes:
+                    AnswerQuizzesSheet(challengeService: challengeService, partnerName: partnerName)
+                case .myCards:
+                    MyCardsSheet(challengeService: challengeService, cardCount: myWishCards, partnerName: partnerName)
+                }
             }
             .onReceive(timer) { date in
                 currentDate = date
@@ -227,6 +288,82 @@ struct HomeView: View {
         .buttonStyle(.plain)
         .padding(.horizontal, 20)
         .accessibilityLabel("Notifications are disabled. Tap to open Settings and enable them.")
+    }
+
+    // MARK: - Anniversary Race Banner
+
+    private var anniversaryRaceBanner: some View {
+        Button {
+            Task {
+                do {
+                    try await challengeService.wishHappyAnniversary()
+                    HapticService.shared.success()
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        } label: {
+            VStack(spacing: 4) {
+                Text("💍 IT'S YOUR ANNIVERSARY! 💍")
+                    .font(.headline)
+                Text("Tap FIRST to wish it & win a Whatever-I-Want card!")
+                    .font(.caption)
+                    .opacity(0.95)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(
+                LinearGradient(colors: [Color.cozyOrange, Color(red: 0.9, green: 0.35, blue: 0.45)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - Photo Dash Banner
+
+    private func photoDashBanner(_ dash: Challenge) -> some View {
+        HStack(spacing: 12) {
+            Text("📸").font(.title2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Photo Dash!").font(.dhBodyBold)
+                Text(dash.prompt).font(.dhCaption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if isSubmittingPhoto {
+                ProgressView()
+            } else {
+                PhotosPicker(selection: $photoPick, matching: .images) {
+                    Label("Send", systemImage: "paperplane.fill").font(.caption.bold())
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.cozyOrange)
+            }
+        }
+        .padding(14)
+        .background(Color.cozyOrange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 20)
+        .onChange(of: photoPick) { _, item in
+            guard let item, let dash = challengeService.activePhotoDash else { return }
+            isSubmittingPhoto = true
+            Task {
+                defer { isSubmittingPhoto = false; photoPick = nil }
+                do {
+                    guard let data = try await item.loadTransferable(type: Data.self),
+                          let image = UIImage(data: data) else {
+                        errorMessage = "Couldn't load that photo"; return
+                    }
+                    try await challengeService.submitPhoto(dash, image: image)
+                    HapticService.shared.success()
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
     }
 
     // MARK: - My Status Section (TOP)
@@ -889,6 +1026,6 @@ struct HomeView: View {
 }
 
 #Preview("Living Room") {
-    HomeView()
+    HomeView(challengeService: ChallengeService(userId: "mock_user", partnerId: "mock_partner"))
         .environmentObject(AuthService())
 }

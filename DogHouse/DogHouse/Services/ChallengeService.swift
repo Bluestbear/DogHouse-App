@@ -166,19 +166,22 @@ class ChallengeService: ObservableObject {
 
     // MARK: - Quiz
 
-    func startQuiz() async throws {
+    /// Create a quiz (custom prompt or picked from the bank) with the
+    /// creator's own answer + guess already filled in; the partner answers
+    /// later and the Cloud Function resolves the winner.
+    func createQuiz(prompt: String, optionA: String, optionB: String,
+                    own: String, guess: String, title: String = "Couple Quiz") async throws {
         let (coupleKey, partnerId) = try requireCouple()
-        let q = QuizQuestion.random()
         try await fs.challengesCollection.document().setData([
             "coupleKey": coupleKey,
             "type": "quiz",
-            "title": "Couple Quiz",
-            "prompt": q.prompt,
-            "options": [q.optionA, q.optionB],
+            "title": title,
+            "prompt": prompt,
+            "options": [optionA, optionB],
             "createdBy": userId,
             "participants": [userId, partnerId],
             "status": "active",
-            "answers": [:],
+            "answers": [userId: ["own": own, "guess": guess]],
             "createdAt": Timestamp(date: Date())
         ])
     }
@@ -191,21 +194,17 @@ class ChallengeService: ObservableObject {
         ])
     }
 
-    // MARK: - Photo Dash
-
-    func startPhotoDash() async throws {
-        let (coupleKey, partnerId) = try requireCouple()
-        try await fs.challengesCollection.document().setData([
-            "coupleKey": coupleKey,
-            "type": "photo",
-            "title": "Photo Dash",
-            "prompt": PhotoDashPrompt.random(),
-            "createdBy": userId,
-            "participants": [userId, partnerId],
-            "status": "active",
-            "createdAt": Timestamp(date: Date())
-        ])
+    /// Quizzes the partner started that I still need to answer.
+    var pendingQuizzes: [Challenge] {
+        challenges.filter { $0.type == "quiz" && $0.isActive && !$0.hasAnswered(userId) }
     }
+
+    /// The active app-triggered photo dash, if any.
+    var activePhotoDash: Challenge? {
+        challenges.first { $0.type == "photo" && $0.isActive }
+    }
+
+    // MARK: - Photo Dash (challenges are created by the server at random)
 
     /// First photo in wins — claimed with a transaction so a simultaneous
     /// upload from both phones can't produce two winners.
