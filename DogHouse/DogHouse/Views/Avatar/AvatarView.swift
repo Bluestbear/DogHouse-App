@@ -316,8 +316,72 @@ struct AvatarView: View {
         case "hat_crown":  crownHat(item)
         case "hat_cowboy": cowboyHat(item)
         case "hat_chef":   chefHat(item)
+        case "hat_beanie": beanieHat(item)
+        case "hat_wizard": wizardHat(item)
+        case "hat_halo":   haloHat(item)
         default: EmptyView()
         }
+    }
+
+    private func beanieHat(_ item: CosmeticItem) -> some View {
+        ZStack(alignment: .bottom) {
+            // Knit dome
+            Ellipse()
+                .fill(item.primaryColor)
+                .frame(width: 34 * scale, height: 22 * scale)
+                .offset(y: -6 * scale)
+            // Folded brim
+            Capsule()
+                .fill(item.accentColor)
+                .frame(width: 36 * scale, height: 8 * scale)
+            // Pom pom
+            Circle()
+                .fill(Color.white.opacity(0.9))
+                .frame(width: 9 * scale)
+                .offset(y: -20 * scale)
+        }
+        .frame(width: 36 * scale, height: 26 * scale)
+        .offset(y: -(33 + 13) * scale)
+    }
+
+    private func wizardHat(_ item: CosmeticItem) -> some View {
+        ZStack {
+            // Tall cone
+            Path { path in
+                path.move(to: CGPoint(x: 15 * scale, y: 0))
+                path.addLine(to: CGPoint(x: 30 * scale, y: 34 * scale))
+                path.addLine(to: CGPoint(x: 0, y: 34 * scale))
+                path.closeSubpath()
+            }
+            .fill(LinearGradient(colors: [item.primaryColor, item.accentColor], startPoint: .top, endPoint: .bottom))
+            // Brim
+            Capsule()
+                .fill(item.primaryColor)
+                .frame(width: 40 * scale, height: 6 * scale)
+                .offset(y: 15 * scale)
+            // Stars
+            Image(systemName: "star.fill")
+                .font(.system(size: 6 * scale))
+                .foregroundStyle(item.accentColor)
+                .offset(y: 4 * scale)
+            Image(systemName: "sparkle")
+                .font(.system(size: 5 * scale))
+                .foregroundStyle(item.accentColor)
+                .offset(x: 3 * scale, y: 18 * scale)
+        }
+        .frame(width: 30 * scale, height: 34 * scale)
+        .offset(y: -(33 + 17) * scale)
+    }
+
+    private func haloHat(_ item: CosmeticItem) -> some View {
+        Ellipse()
+            .stroke(
+                LinearGradient(colors: [item.primaryColor, item.accentColor], startPoint: .leading, endPoint: .trailing),
+                lineWidth: 4 * scale
+            )
+            .frame(width: 30 * scale, height: 10 * scale)
+            .shadow(color: item.primaryColor.opacity(0.7), radius: 5 * scale)
+            .offset(y: -(33 + 12) * scale)
     }
 
     private func partyHat(_ item: CosmeticItem) -> some View {
@@ -466,6 +530,19 @@ struct AvatarView: View {
                     .font(.system(size: 7 * scale))
                     .foregroundStyle(item.primaryColor)
             }
+        case "glasses_round":
+            Circle()
+                .fill(item.accentColor.opacity(0.25))
+                .overlay(Circle().stroke(item.primaryColor, lineWidth: 2 * scale))
+                .frame(width: 15 * scale, height: 15 * scale)
+        case "glasses_ski":
+            RoundedRectangle(cornerRadius: 6 * scale)
+                .fill(
+                    LinearGradient(colors: [item.primaryColor.opacity(0.75), item.accentColor.opacity(0.7)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                )
+                .overlay(RoundedRectangle(cornerRadius: 6 * scale).stroke(Color.white.opacity(0.6), lineWidth: 1.5 * scale))
+                .frame(width: 19 * scale, height: 14 * scale)
         default:
             Circle()
                 .stroke(item.primaryColor, lineWidth: 2 * scale)

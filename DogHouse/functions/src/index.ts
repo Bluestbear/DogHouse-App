@@ -29,7 +29,6 @@ const COSMETIC_PRICES: Record<string, number> = {
   hat_wizard: 180, hat_beanie: 70, hat_halo: 220,
   glasses_cool: 80, glasses_heart: 100, glasses_star: 120,
   glasses_round: 90, glasses_ski: 110,
-  bandana_red: 60, bandana_blue: 60, bandana_camo: 130,
 };
 
 function categoryOf(itemId: string): string {
