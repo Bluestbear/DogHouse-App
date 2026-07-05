@@ -60,9 +60,6 @@ struct FriendsTabView: View {
             .sheet(isPresented: $showCreateGroup) {
                 CreateGroupSheet(friendService: friendService)
             }
-            .onChange(of: friendService.groups, initial: true) { _, newGroups in
-                voteService.listenForVotes(inGroupIds: newGroups.map { $0.id })
-            }
         }
     }
 
@@ -472,6 +469,7 @@ struct StartVoteSheet: View {
                                 try? await voteService.createVoteEvent(
                                     groupId: group.id,
                                     doghousedUserIds: Array(selectedMemberIds),
+                                    audienceIds: group.memberIds,
                                     durationMinutes: durationMinutes
                                 )
                                 isCreating = false

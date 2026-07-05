@@ -66,14 +66,19 @@ class ChallengeService: ObservableObject {
     private func startListening() {
         guard let coupleKey else { return }
 
+        // Query by participants (array-contains me) — this is the shape the
+        // security rules can prove; querying by coupleKey alone gets the
+        // whole listener denied. coupleKey is then filtered client-side.
+        let key = coupleKey
         challengesListener = fs.challengesCollection
-            .whereField("coupleKey", isEqualTo: coupleKey)
+            .whereField("participants", arrayContains: userId)
             .addSnapshotListener { [weak self] snapshot, _ in
                 guard let self else { return }
                 Task { @MainActor [weak self] in
                     guard let self, let docs = snapshot?.documents else { return }
                     self.challenges = docs
                         .compactMap { try? self.fs.decode(Challenge.self, from: $0) }
+                        .filter { $0.coupleKey == key }
                         .sorted { $0.createdAt > $1.createdAt }
                 }
             }
@@ -100,10 +105,19 @@ class ChallengeService: ObservableObject {
             }
     }
 
+    /// Couple context, or a helpful error instead of a silent no-op
+    private func requireCouple() throws -> (coupleKey: String, partnerId: String) {
+        guard let coupleKey, let partnerId, partnerId != "skipped" else {
+            throw NSError(domain: "ChallengeService", code: -30,
+                          userInfo: [NSLocalizedDescriptionKey: "You need a partner for this — pair up in Profile first!"])
+        }
+        return (coupleKey, partnerId)
+    }
+
     // MARK: - Anniversary
 
     func setAnniversary(_ date: Date) async throws {
-        guard let coupleKey, let partnerId else { return }
+        let (coupleKey, partnerId) = try requireCouple()
         try await fs.coupleMetaCollection.document(coupleKey).setData([
             "anniversary": Timestamp(date: date),
             "userIds": [userId, partnerId]
@@ -130,7 +144,7 @@ class ChallengeService: ObservableObject {
     /// Rules forbid updating a completed challenge, so the second partner's
     /// attempt fails — the race can only be won once.
     func wishHappyAnniversary() async throws {
-        guard let coupleKey, let partnerId else { return }
+        let (coupleKey, partnerId) = try requireCouple()
         let year = Calendar.current.component(.year, from: Date())
         let docId = "anniv_\(coupleKey)_\(year)"
         let doc = try await fs.challengesCollection.document(docId).getDocument()
@@ -153,7 +167,7 @@ class ChallengeService: ObservableObject {
     // MARK: - Quiz
 
     func startQuiz() async throws {
-        guard let coupleKey, let partnerId else { return }
+        let (coupleKey, partnerId) = try requireCouple()
         let q = QuizQuestion.random()
         try await fs.challengesCollection.document().setData([
             "coupleKey": coupleKey,
@@ -180,7 +194,7 @@ class ChallengeService: ObservableObject {
     // MARK: - Photo Dash
 
     func startPhotoDash() async throws {
-        guard let coupleKey, let partnerId else { return }
+        let (coupleKey, partnerId) = try requireCouple()
         try await fs.challengesCollection.document().setData([
             "coupleKey": coupleKey,
             "type": "photo",
