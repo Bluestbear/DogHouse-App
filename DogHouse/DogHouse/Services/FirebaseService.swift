@@ -34,7 +34,6 @@ final class FirebaseService {
     var partnerCodesCollection: CollectionReference { db.collection("partnerCodes") }
     var doghouseEventsCollection: CollectionReference { db.collection("doghouseEvents") }
     var friendshipsCollection: CollectionReference { db.collection("friendships") }
-    var friendGroupsCollection: CollectionReference { db.collection("friendGroups") }
     var voteEventsCollection: CollectionReference { db.collection("voteEvents") }
     var onboardingTasksCollection: CollectionReference { db.collection("onboardingTasks") }
     var coupleTasksCollection: CollectionReference { db.collection("coupleTasks") }

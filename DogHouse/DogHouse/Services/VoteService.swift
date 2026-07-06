@@ -63,21 +63,6 @@ class VoteService: ObservableObject {
         // Listener updates activeVoteEvents automatically
     }
 
-    func createVoteEvent(groupId: String, doghousedUserIds: [String], audienceIds: [String], durationMinutes: Int = 30) async throws {
-        let docRef = fs.voteEventsCollection.document()
-        let event = VoteEvent(
-            id: docRef.documentID,
-            groupId: groupId,
-            doghousedUserIds: doghousedUserIds,
-            votes: [:],
-            startedAt: Date(),
-            endsAt: Date().addingTimeInterval(Double(durationMinutes) * 60),
-            winnerId: nil,
-            status: "active",
-            audienceIds: audienceIds
-        )
-        try await docRef.setData(fs.encoder.encode(event))
-    }
 
     // Vote resolution happens server-side (resolveExpiredVotes Cloud Function,
     // runs every minute): it tallies, releases the winner from the doghouse,

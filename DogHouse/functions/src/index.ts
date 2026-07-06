@@ -253,68 +253,8 @@ export const onVoteEventCreated = onDocumentCreated(
   }
 );
 
-// ─────────────────────────────────────────────────────────────
-// 4. Friendships — server-side friendIds bookkeeping + notifications.
-//    Clients only ever write the `status` field; syncing both users'
-//    friendIds arrays happens here with admin privileges (security
-//    rules forbid users writing each other's documents).
-// ─────────────────────────────────────────────────────────────
-export const onFriendshipWritten = onDocumentWritten(
-  { document: "friendships/{friendshipId}", region: REGION },
-  async (event) => {
-    const before = event.data?.before.data();
-    const after = event.data?.after.data();
-    if (!after) return;
-
-    const fromUserId: string = after.fromUserId;
-    const toUserId: string = after.toUserId;
-
-    // New pending request → notify the recipient
-    if (!before && after.status === "pending") {
-      const fromName = await displayName(fromUserId);
-      await notifyUser(
-        toUserId,
-        "🐾 New friend request!",
-        `${fromName} wants to be your friend on DogHouse`,
-        { data: { type: "friends" } }
-      );
-      return;
-    }
-
-    // Accepted → link both users, notify the requester
-    if (before?.status === "pending" && after.status === "accepted") {
-      const batch = db.batch();
-      batch.update(db.collection("users").doc(fromUserId), {
-        friendIds: FieldValue.arrayUnion(toUserId),
-      });
-      batch.update(db.collection("users").doc(toUserId), {
-        friendIds: FieldValue.arrayUnion(fromUserId),
-      });
-      await batch.commit();
-
-      const toName = await displayName(toUserId);
-      await notifyUser(
-        fromUserId,
-        "🎉 Friend request accepted!",
-        `${toName} accepted your friend request`,
-        { data: { type: "friends" } }
-      );
-      return;
-    }
-
-    // Removed → unlink both users
-    if (before?.status !== "removed" && after.status === "removed") {
-      const batch = db.batch();
-      batch.update(db.collection("users").doc(fromUserId), {
-        friendIds: FieldValue.arrayRemove(toUserId),
-      });
-      batch.update(db.collection("users").doc(toUserId), {
-        friendIds: FieldValue.arrayRemove(fromUserId),
-      });
-      await batch.commit();
-    }
-  }
-);
+// (Individual friendships removed — couples befriend couples via the
+//  addCoupleFriend / removeCoupleFriend callables further below.)
 
 // ─────────────────────────────────────────────────────────────
 // 5. Feed posts — notify friends of a public sending, and detect
@@ -345,10 +285,13 @@ export const onFeedPostCreated = onDocumentCreated(
     );
 
     // ── Jailbreak vote detection ──
-    // Is a FRIEND of the freshly doghoused user also publicly in the doghouse?
-    const receiverDoc = await db.collection("users").doc(receiverId).get();
-    const receiverFriendIds: string[] = receiverDoc.data()?.friendIds ?? [];
-    if (receiverFriendIds.length === 0) return;
+    // Is someone in a FRIENDED COUPLE also publicly in the doghouse?
+    // The post's audience already spans the couple + friended couples, so
+    // anyone in it besides this couple is a valid jailbreak partner.
+    const jailbreakCandidates = new Set(
+      audienceIds.filter((id) => id !== senderId && id !== receiverId)
+    );
+    if (jailbreakCandidates.size === 0) return;
 
     const activePosts = await db
       .collection("feedPosts")
@@ -359,7 +302,7 @@ export const onFeedPostCreated = onDocumentCreated(
       (d) =>
         d.id !== postId &&
         d.data().receiverId !== receiverId &&
-        receiverFriendIds.includes(d.data().receiverId)
+        jailbreakCandidates.has(d.data().receiverId)
     );
     if (!otherPost) return;
 
@@ -626,21 +569,16 @@ export const onDeletionRequest = onDocumentCreated(
         }
       }
 
-      // Remove this user from everyone's friend lists
-      const friendsOf = await db
-        .collection("users")
-        .where("friendIds", "array-contains", uid)
+      // Remove couple friendships this user was part of (deleting one
+      // member dissolves the couple, so the link goes too)
+      const coupleLinks = await db
+        .collection("coupleFriendships")
+        .where("memberIds", "array-contains", uid)
         .get();
-      await Promise.all(
-        friendsOf.docs.map((d) =>
-          d.ref.update({ friendIds: FieldValue.arrayRemove(uid) })
-        )
-      );
+      await Promise.all(coupleLinks.docs.map((d) => d.ref.delete()));
 
       // Delete owned/related documents
       await deleteWhere("partnerCodes", "userId", uid);
-      await deleteWhere("friendships", "fromUserId", uid);
-      await deleteWhere("friendships", "toUserId", uid);
       await deleteWhere("feedPosts", "senderId", uid);
       await deleteWhere("feedPosts", "receiverId", uid);
       await deleteWhere("doghouseEvents", "senderId", uid);
@@ -1090,3 +1028,70 @@ export const randomPhotoDash = onSchedule(
     }
   }
 );
+
+// ═════════════════════════════════════════════════════════════
+// COUPLE FRIENDSHIPS — couples befriend other couples by code.
+// A couple is identified by its coupleKey (sorted uids). Adding by
+// code links all four people; the feed audience (audienceForCouple)
+// already spans coupleFriendships.
+// ═════════════════════════════════════════════════════════════
+
+function friendshipIdFor(k1: string, k2: string): string {
+  return [k1, k2].sort().join("__");
+}
+
+export const addCoupleFriend = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const code: string = (req.data?.code ?? "").toString().toUpperCase();
+  if (!code) throw new HttpsError("invalid-argument", "Enter a couple code.");
+
+  const me = (await db.collection("users").doc(uid).get()).data();
+  const myPartner: string | undefined = me?.partnerId;
+  if (!myPartner || myPartner === "skipped") {
+    throw new HttpsError("failed-precondition", "Pair with your partner first.");
+  }
+
+  // Resolve the code → a user, then their partner
+  const codeDoc = await db.collection("partnerCodes").doc(code).get();
+  const themId = codeDoc.data()?.userId as string | undefined;
+  if (!themId) throw new HttpsError("not-found", "No couple found with that code.");
+  const them = (await db.collection("users").doc(themId).get()).data();
+  const themPartner: string | undefined = them?.partnerId;
+  if (!themPartner || themPartner === "skipped") {
+    throw new HttpsError("failed-precondition", "That user isn't paired yet.");
+  }
+
+  const myKey = coupleKeyOf(uid, myPartner);
+  const themKey = coupleKeyOf(themId, themPartner);
+  if (myKey === themKey) {
+    throw new HttpsError("invalid-argument", "That's your own couple!");
+  }
+
+  const docId = friendshipIdFor(myKey, themKey);
+  await db.collection("coupleFriendships").doc(docId).set({
+    coupleKeys: [myKey, themKey],
+    memberIds: [uid, myPartner, themId, themPartner],
+    createdAt: Timestamp.now(),
+  });
+
+  const myName = me?.displayName ?? "A couple";
+  await notifyUsers([themId, themPartner], "💞 New couple friend!",
+    `${myName}'s couple added yours on DogHouse`, { data: { type: "friends" } });
+  return { ok: true };
+});
+
+export const removeCoupleFriend = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const otherKey: string = req.data?.coupleKey;
+  if (!otherKey) throw new HttpsError("invalid-argument", "Missing couple.");
+  const me = (await db.collection("users").doc(uid).get()).data();
+  const myPartner: string | undefined = me?.partnerId;
+  if (!myPartner) throw new HttpsError("failed-precondition", "No partner.");
+  const myKey = coupleKeyOf(uid, myPartner);
+  const docId = friendshipIdFor(myKey, otherKey);
+  const snap = await db.collection("coupleFriendships").doc(docId).get();
+  if (snap.exists && (snap.data()?.memberIds ?? []).includes(uid)) {
+    await snap.ref.delete();
+  }
+  return { ok: true };
+});
