@@ -15,7 +15,6 @@
 import SwiftUI
 import FirebaseFirestore
 import WidgetKit
-import PhotosUI
 import OSLog
 
 /// Which game sheet is presented from the Home "+" menu.
@@ -32,7 +31,6 @@ struct HomeView: View {
 
     @State private var showSendSheet = false
     @State private var activeGameSheet: GameSheet?
-    @State private var photoPick: PhotosPickerItem?
     @State private var isSubmittingPhoto = false
     /// Coarse "now" for everything that changes over minutes and hours: room
     /// level, treat accrual, the 5-hour rose window, "sent 2 hours ago", the
@@ -53,7 +51,6 @@ struct HomeView: View {
     @State private var showRosesToast = false
     @State private var rosesSenderName = ""
     @State private var isSendingRoses = false
-    @State private var showCameraPicker = false
     @State private var isAwardingTreats = false
     @Environment(\.scenePhase) private var scenePhase
 
@@ -159,7 +156,12 @@ struct HomeView: View {
 
                     // App-triggered photo dash — first to send a pic wins
                     if let dash = challengeService.activePhotoDash {
-                        photoDashBanner(dash)
+                        PhotoDashBanner(
+                            dash: dash,
+                            onSubmit: submitDashPhoto,
+                            onError: { errorMessage = $0 },
+                            isSubmitting: isSubmittingPhoto
+                        )
                     }
 
                     // Result of the most recent photo dash (last 24h) —
@@ -351,66 +353,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Photo Dash Banner
-
-    private func photoDashBanner(_ dash: Challenge) -> some View {
-        HStack(spacing: 12) {
-            Text("📸").font(.title2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Photo Dash!").font(.dhBodyBold)
-                Text(dash.prompt).font(.dhCaption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if isSubmittingPhoto {
-                ProgressView()
-            } else {
-                // Snap with the camera — the true "dash" experience
-                if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    Button {
-                        showCameraPicker = true
-                    } label: {
-                        Image(systemName: "camera.fill").font(.caption.bold())
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.cozyOrange)
-                }
-                // Or pick from the library
-                PhotosPicker(selection: $photoPick, matching: .images) {
-                    Image(systemName: "photo.on.rectangle").font(.caption.bold())
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.cozyOrange)
-            }
-        }
-        .padding(14)
-        .background(Color.cozyOrange.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 20)
-        .fullScreenCover(isPresented: $showCameraPicker) {
-            CameraPicker { image in
-                submitDashPhoto(image)
-            }
-            .ignoresSafeArea()
-        }
-        .onChange(of: photoPick) { _, item in
-            guard let item else { return }
-            isSubmittingPhoto = true
-            Task {
-                defer { photoPick = nil }
-                do {
-                    guard let data = try await item.loadTransferable(type: Data.self),
-                          let image = UIImage(data: data) else {
-                        isSubmittingPhoto = false
-                        errorMessage = "Couldn't load that photo"; return
-                    }
-                    submitDashPhoto(image)
-                } catch {
-                    isSubmittingPhoto = false
-                    errorMessage = error.localizedDescription
-                }
-            }
-        }
-    }
+    // MARK: - Photo Dash
 
     private func submitDashPhoto(_ image: UIImage) {
         guard let dash = challengeService.activePhotoDash else { return }
@@ -474,7 +417,15 @@ struct HomeView: View {
 
         // Info card — always shows my own status data
         if let myEvent = doghouseService.myDoghouseEvent {
-            myDoghouseInfoCard(event: myEvent)
+            MyDoghouseInfoCard(
+                event: myEvent,
+                partnerName: partnerName,
+                coupleTasks: coupleTasks,
+                coupleTasksLoaded: coupleTasksLoaded,
+                onRequestRedemption: requestRedemption,
+                onShowTasks: { showTasksSheet = true }
+            )
+            .task { await loadCoupleTasks() }
         } else {
             myLivingRoomInfoSection
         }
@@ -601,186 +552,22 @@ struct HomeView: View {
             timeSinceRelease: timeSinceMyRelease
         )
 
-        VStack(spacing: 4) {
-            Text("You've been home for:")
-                .font(.dhCaption)
-                .foregroundStyle(.secondary)
-            if let myHomeStart {
-                ElapsedTimeText(start: myHomeStart)
-                    .font(.dhTimer)
-                    .foregroundStyle(Color.freedomGreen)
-            }
+        if let myHomeStart {
+            TimeAtHomeCard(start: myHomeStart, elapsed: timeSinceMyRelease)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("You've been home for \(timeSinceMyRelease.formattedDuration)")
-        .padding()
-        .frame(maxWidth: .infinity)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 20)
     }
 
-    // MARK: My Doghouse Info Card (I'm sent to the doghouse)
-
-    @ViewBuilder
-    private func myDoghouseInfoCard(event: DoghouseEvent) -> some View {
-        VStack(spacing: 16) {
-            VStack(spacing: 4) {
-                Text("You've been sent to the DogHouse!")
-                    .font(.dhTitle)
-                    .multilineTextAlignment(.center)
-
-                ElapsedTimeText(start: event.startedAt)
-                    .font(.dhTimer)
-                    .foregroundStyle(.red)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Reason", systemImage: "text.quote")
-                    .font(.dhCaptionBold)
-                    .foregroundStyle(.secondary)
-                Text(event.reason)
-                    .font(.dhBody)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.systemGray5))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-
-            VStack(alignment: .leading, spacing: 12) {
-                Label("How to get out:", systemImage: "lightbulb.fill")
-                    .font(.dhCaptionBold)
-                    .foregroundStyle(Color.cozyOrange)
-
-                HStack(spacing: 10) {
-                    Image(systemName: "clock.fill")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Wait it out")
-                            .font(.dhBodyBold)
-                        Text("Stay here until \(partnerName) lets you out")
-                            .font(.dhCaption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(10)
-                .background(Color(.systemGray5))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-
-                // Redemption: mark the make-it-up suggestion as done
-                if let suggestion = event.suggestion {
-                    if event.redemptionRequested == true {
-                        HStack(spacing: 10) {
-                            Image(systemName: "hourglass")
-                                .foregroundStyle(Color.cozyOrange)
-                                .frame(width: 28)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Redemption requested")
-                                    .font(.dhBodyBold)
-                                Text("Waiting for \(partnerName) to confirm...")
-                                    .font(.dhCaption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                        }
-                        .padding(10)
-                        .background(Color.cozyOrange.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    } else {
-                        Button {
-                            HapticService.shared.success()
-                            Task {
-                                do {
-                                    try await doghouseService.requestRedemption()
-                                } catch {
-                                    errorMessage = "Couldn't send: \(error.localizedDescription)"
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                Text("🦴")
-                                    .frame(width: 28)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("I did it!")
-                                        .font(.dhBodyBold)
-                                    Text("\"\(suggestion)\" — tell \(partnerName) you made it up")
-                                        .font(.dhCaption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "paperplane.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(Color.freedomGreen)
-                            }
-                            .padding(10)
-                            .background(Color.freedomGreen.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Mark the make-it-up suggestion as done and notify \(partnerName)")
-                    }
-                }
-
-                if coupleTasks.isEmpty && coupleTasksLoaded {
-                    Button {
-                        showTasksSheet = true
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "list.clipboard.fill")
-                                .foregroundStyle(Color.cozyOrange)
-                                .frame(width: 28)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Do a Task")
-                                    .font(.dhBodyBold)
-                                Text("No tasks set up yet — tap to propose tasks!")
-                                    .font(.dhCaption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(10)
-                        .background(Color.cozyOrange.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
-                    .buttonStyle(.plain)
-                } else if !coupleTasks.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "list.clipboard.fill")
-                                .foregroundStyle(Color.cozyOrange)
-                                .frame(width: 28)
-                            Text("Do a Task")
-                                .font(.dhBodyBold)
-                            Spacer()
-                        }
-
-                        ForEach(coupleTasks) { task in
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(Color.cozyOrange)
-                                    .frame(width: 6, height: 6)
-                                Text(task.title)
-                                    .font(.dhBody)
-                            }
-                        }
-                    }
-                    .padding(10)
-                    .background(Color.cozyOrange.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
+    /// Tell the sender the make-it-up suggestion is done; they get a push
+    /// asking to confirm.
+    private func requestRedemption() {
+        HapticService.shared.success()
+        Task {
+            do {
+                try await doghouseService.requestRedemption()
+            } catch {
+                errorMessage = "Couldn't send: \(error.localizedDescription)"
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .padding(.horizontal, 20)
-        .task { await loadCoupleTasks() }
     }
 
     // MARK: - Load Couple Tasks
@@ -820,216 +607,66 @@ struct HomeView: View {
 
     @ViewBuilder
     private var partnerControlsSection: some View {
-        // Divider between my status and partner controls
-        HStack {
-            Rectangle()
-                .fill(Color(.systemGray4))
-                .frame(height: 1)
-            Text(partnerName)
-                .font(.dhCaptionBold)
-                .foregroundStyle(.secondary)
-            Rectangle()
-                .fill(Color(.systemGray4))
-                .frame(height: 1)
-        }
-        .padding(.horizontal, 24)
+        PartnerSectionDivider(partnerName: partnerName)
 
         if let partnerEvent = doghouseService.partnerDoghouseEvent {
             // I sent my partner to the doghouse — show their status + release button
-            partnerInDoghouseCard(event: partnerEvent)
+            PartnerInDoghouseCard(
+                event: partnerEvent,
+                partnerName: partnerName,
+                avatarId: partnerAvatarId,
+                cosmetics: partnerCosmetics,
+                now: currentDate,
+                onRelease: { releasePartner(event: partnerEvent) }
+            )
         } else {
             // My partner is NOT in the doghouse — show send button
             partnerFreeSection
         }
     }
 
-    // MARK: Partner In Doghouse Card
-
-    @ViewBuilder
-    private func partnerInDoghouseCard(event: DoghouseEvent) -> some View {
-        VStack(spacing: 12) {
-            // Partner's avatar + status
-            HStack(spacing: 12) {
-                AvatarView(
-                    avatar: DogAvatar.avatar(for: partnerAvatarId),
-                    mood: .sad,
-                    size: 56,
-                    cosmetics: partnerCosmetics
-                )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(partnerName) is in the DogHouse")
-                        .font(.dhBodyBold)
-                        .foregroundStyle(.red)
-                    Text("Sent \(currentDate.timeIntervalSince(event.startedAt).formattedDuration) ago")
-                        .font(.dhCaption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-            }
-
-            // Reason
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Reason: \(event.reason)")
-                    .font(.dhCaption)
-                    .foregroundStyle(.secondary)
-                if let suggestion = event.suggestion {
-                    Text("To get out: \(suggestion)")
-                        .font(.dhCaption)
-                        .foregroundStyle(Color.cozyOrange)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            // Redemption requested — the dog says they made it up
-            if event.redemptionRequested == true {
-                HStack(spacing: 10) {
-                    Text("🦴")
-                        .font(.title3)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(partnerName) says they made it up!")
-                            .font(.dhBodyBold)
-                        if let suggestion = event.suggestion {
-                            Text("\"\(suggestion)\"")
-                                .font(.dhCaption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                }
-                .padding(12)
-                .background(Color.cozyOrange.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-
-            // Release button — confirming a redemption also rewards treats
-            Button {
-                showReleaseAnimation = true
-                let byRedemption = event.redemptionRequested == true
-                Task {
-                    do {
-                        try await doghouseService.releasePartner(
-                            releasedBy: byRedemption ? "redemption" : "sender"
-                        )
-                        SoundService.shared.playRelease()
-                    } catch {
-                        errorMessage = "Failed to release: \(error.localizedDescription)"
-                    }
-                }
-            } label: {
-                HStack {
-                    Image(systemName: "lock.open.fill")
-                    Text(event.redemptionRequested == true
-                         ? "Confirm & Let \(partnerName) Out 🦴"
-                         : "Let \(partnerName) Out 🏠")
-                }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.freedomGreen)
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            .accessibilityLabel("Release \(partnerName) from the doghouse")
-        }
-        .padding(16)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .padding(.horizontal, 20)
-    }
-
     // MARK: Partner Free — Send Button
 
     @ViewBuilder
     private var partnerFreeSection: some View {
-        // Partner info bar
         if let partner = authService.partnerProfile {
-            HStack(spacing: 12) {
-                AvatarView(
-                    avatar: DogAvatar.avatar(for: partner.avatarId ?? "dog_1"),
-                    mood: .happy,
-                    size: 52,
-                    cosmetics: partnerCosmetics
-                )
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(partner.displayName)
-                        .font(.dhBodyBold)
-                    Text("Home sweet home")
-                        .font(.dhCaption)
-                        .foregroundStyle(Color.freedomGreen)
-                }
-
-                Spacer()
-
-                if partner.hasImmunity {
-                    Label("Immune", systemImage: "shield.fill")
-                        .font(.dhBadge)
-                        .foregroundStyle(.blue)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.blue.opacity(0.1))
-                        .clipShape(Capsule())
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .padding(.horizontal, 20)
+            PartnerHomeBar(partner: partner, cosmetics: partnerCosmetics)
         }
 
-        // Grace meter
         GraceMeterView(charges: myGraceCharges)
 
-        // Immunity banner
         if let partner = authService.partnerProfile, partner.hasImmunity,
            let immunityEnd = partner.immunityUntil {
-            HStack(spacing: 8) {
-                Image(systemName: "shield.fill")
-                    .foregroundStyle(.blue)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(partnerName) has immunity!")
-                        .font(.dhCaptionBold)
-                    Text("Expires in \(immunityEnd.timeIntervalSince(currentDate).formattedDuration)")
-                        .font(.dhCaption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(12)
-            .background(Color.blue.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .padding(.horizontal, 20)
+            PartnerImmunityBanner(
+                partnerName: partnerName,
+                immunityEnd: immunityEnd,
+                now: currentDate
+            )
         }
 
-        // Send to doghouse button
-        Button {
-            showSendSheet = true
-        } label: {
-            HStack {
-                Image(systemName: "house.fill")
-                Text("Send \(partnerName) to the DogHouse 🐕")
-            }
-            .font(.headline)
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(sendDisabled ? Color.gray.opacity(0.4) : Color.red)
-            .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-        }
-        .disabled(sendDisabled)
-        .accessibilityLabel(sendDisabled
-            ? partnerHasImmunity
-                ? "\(partnerName) has immunity, cannot send to doghouse"
-                : "No grace charges remaining"
-            : "Send \(partnerName) to the doghouse")
-        .padding(.horizontal, 20)
+        SendToDoghouseButton(
+            partnerName: partnerName,
+            partnerHasImmunity: partnerHasImmunity,
+            hasGraceCharges: myGraceCharges > 0,
+            onTap: { showSendSheet = true }
+        )
     }
 
-    private var sendDisabled: Bool {
-        partnerHasImmunity || myGraceCharges <= 0
+    /// Let the partner out. Confirming a redemption claim also rewards treats,
+    /// which is why the server needs to know which of the two this was.
+    private func releasePartner(event: DoghouseEvent) {
+        showReleaseAnimation = true
+        let byRedemption = event.redemptionRequested == true
+        Task {
+            do {
+                try await doghouseService.releasePartner(
+                    releasedBy: byRedemption ? "redemption" : "sender"
+                )
+                SoundService.shared.playRelease()
+            } catch {
+                errorMessage = "Failed to release: \(error.localizedDescription)"
+            }
+        }
     }
 
     // MARK: - Level Up Detection
