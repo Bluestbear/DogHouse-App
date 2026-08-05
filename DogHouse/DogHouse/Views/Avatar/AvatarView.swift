@@ -10,6 +10,13 @@ struct AvatarView: View {
     var size: CGFloat = 80
     var cosmetics: AvatarCosmetics = .none
 
+    /// Set false for dense grids (avatar picker, friends list) so dozens
+    /// of timers don't run at once.
+    var blinks: Bool = true
+
+    @State private var isBlinking = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var scale: CGFloat { size / 80.0 }
 
     var body: some View {
@@ -39,6 +46,26 @@ struct AvatarView: View {
         }
         .frame(width: size, height: size)
         .accessibilityLabel("\(avatar.name) dog, feeling \(mood.rawValue)")
+        .task(id: blinks && !reduceMotion) {
+            guard blinks && !reduceMotion else { return }
+            // Desync avatars that appear on screen together
+            try? await Task.sleep(for: .seconds(Double.random(in: 0...2.0)))
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Double.random(in: 2.6...6.0)))
+                await blinkOnce()
+                if Double.random(in: 0...1) < 0.35 {
+                    try? await Task.sleep(for: .seconds(0.11))
+                    await blinkOnce()
+                }
+            }
+        }
+    }
+
+    private func blinkOnce() async {
+        withAnimation(.easeIn(duration: 0.07)) { isBlinking = true }
+        try? await Task.sleep(for: .seconds(0.09))
+        withAnimation(.easeOut(duration: 0.11)) { isBlinking = false }
+        try? await Task.sleep(for: .seconds(0.11))
     }
 
     // MARK: - Tail
@@ -132,7 +159,15 @@ struct AvatarView: View {
                 .fill(Color.white.opacity(0.75))
                 .frame(width: 4 * scale, height: 4 * scale)
                 .offset(x: 3 * scale, y: -3 * scale)
+
+            // Eyelid — fur coloured, so it reads as the lid closing
+            Rectangle()
+                .fill(avatar.primaryColor)
+                .frame(width: 15 * scale, height: 15 * scale)
+                .offset(y: isBlinking ? 0 : -15 * scale)
         }
+        .frame(width: 14 * scale, height: 14 * scale)
+        .clipShape(Circle())
     }
 
     private var eyePupilSize: CGFloat {

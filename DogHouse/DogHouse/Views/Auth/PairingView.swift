@@ -23,7 +23,7 @@ struct PairingView: View {
                             .font(.system(size: 50))
                             .foregroundStyle(Color.cozyOrange)
                         Text("Pair Up")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .font(.dhScreenTitle)
                         Text("Share your code with your partner, or enter theirs.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
@@ -38,13 +38,13 @@ struct PairingView: View {
                             .font(.headline)
                             .foregroundStyle(.secondary)
 
-                        Text(authService.userProfile?.partnerCode ?? "------")
-                            .font(.system(size: 36, weight: .bold, design: .monospaced))
+                        Text(authService.partnerCode ?? "------")
+                            .font(.dhTimer)
                             .tracking(6)
 
                         HStack(spacing: 16) {
                             Button {
-                                if let code = authService.userProfile?.partnerCode {
+                                if let code = authService.partnerCode {
                                     UIPasteboard.general.string = code
                                 }
                             } label: {
@@ -54,7 +54,7 @@ struct PairingView: View {
                             .buttonStyle(.bordered)
                             .tint(Color.dogHouseBrown)
 
-                            if let code = authService.userProfile?.partnerCode {
+                            if let code = authService.partnerCode {
                                 ShareLink(item: "Join me on DogHouse! My code is: \(code)") {
                                     Label("Share", systemImage: "square.and.arrow.up")
                                         .font(.subheadline.bold())

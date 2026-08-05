@@ -6,8 +6,32 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Any authenticated user can read profiles (needed for partner/friend
-    // lookups and the friends feed).
+    function myPartnerId() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid))
+               .data.get('partnerId', null);
+    }
+
+    // A coupleKey is "uidA_uidB" sorted. Membership means: I am one half AND
+    // the other half is genuinely my current partner. Checking only that my
+    // uid appears in the key let anyone fabricate a couple doc keyed to a
+    // stranger's uid.
+    function isMyCoupleKey(coupleKey) {
+      let parts = coupleKey.split('_');
+      return parts.size() == 2
+        && request.auth.uid in parts
+        && (parts[0] == request.auth.uid ? parts[1] : parts[0]) == myPartnerId();
+    }
+
+    // Profiles are readable ONE DOCUMENT AT A TIME by any authenticated
+    // user — partner and friend-couple lookups fetch by known uid and need
+    // displayName/avatarId/cosmetics.
+    //
+    // `list` is denied. Allowing it would let any signed-in account walk the
+    // entire user table; queries must therefore fetch by document id
+    // (see FriendService.fetchProfiles).
+    //
+    // Secrets never live on this document: fcmToken and partnerCode are in
+    // the owner-only /private/data subdocument below.
     //
     // Economy fields (treats, graceCharges, immunityUntil, wishCards,
     // ownedItemIds, lastTreatAward) are SERVER-ONLY: clients cannot change
@@ -15,15 +39,20 @@ service cloud.firestore {
     // All economy mutations go through callable Cloud Functions which run
     // with admin privileges and bypass these rules.
     match /users/{userId} {
-      allow read: if authed();
+      allow get: if authed();
+      allow list: if false;
       allow create: if authed() && request.auth.uid == userId;
 
-      // Owner may update only non-economy fields.
+      // Owner may update only non-economy fields, and may never (re)introduce
+      // the relocated secrets. Removing them is allowed — that is exactly what
+      // the one-time migration in AuthService.migrateLegacyPrivateFields does,
+      // since the resulting document contains neither key.
       allow update: if authed()
         && request.auth.uid == userId
         && !request.resource.data.diff(resource.data).affectedKeys()
              .hasAny(['treats', 'graceCharges', 'immunityUntil', 'wishCards',
-                      'ownedItemIds', 'lastTreatAward', 'lastGraceRecharge']);
+                      'ownedItemIds', 'lastTreatAward', 'lastGraceRecharge'])
+        && !request.resource.data.keys().hasAny(['fcmToken', 'partnerCode']);
 
       // A partner may (legacy path) change only equipped cosmetics. Equipping
       // is also available via the equipCosmetic callable; this stays for
@@ -31,6 +60,24 @@ service cloud.firestore {
       allow update: if authed()
         && resource.data.partnerId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['equippedItemIds']);
+    }
+
+    // Owner-only private data: the push token and this account's pairing
+    // code. These used to sit on the public /users document, where every
+    // signed-in account could read them — a pairing code is enough to hijack
+    // an unpaired user, and a push token is a device identifier.
+    //
+    // Cloud Functions read this with admin privileges (rules do not apply),
+    // which is how notifyUser still resolves tokens.
+    match /users/{userId}/private/{docId} {
+      allow read: if authed() && request.auth.uid == userId;
+      allow create: if authed() && request.auth.uid == userId;
+      // partnerCode is issued once at sign-up and is immutable thereafter;
+      // it is the key other users pair against.
+      allow update: if authed()
+        && request.auth.uid == userId
+        && (!('partnerCode' in resource.data)
+            || request.resource.data.get('partnerCode', null) == resource.data.partnerCode);
     }
 
     // Any authenticated user can read codes (needed for pairing lookup).
@@ -91,6 +138,13 @@ service cloud.firestore {
         && request.resource.data.get('roasts', {}).diff(resource.data.get('roasts', {})).affectedKeys().hasOnly([request.auth.uid]);
     }
 
+    // Feedback (complaints/suggestions) — create-only, as yourself. The
+    // onFeedbackCreated Cloud Function emails it to the developer.
+    match /feedback/{feedbackId} {
+      allow create: if authed()
+        && request.resource.data.fromUserId == request.auth.uid;
+    }
+
     // Account deletion requests — write-only marker for your own uid;
     // the onDeletionRequest Cloud Function does the actual cleanup.
     match /deletionRequests/{userId} {
@@ -98,33 +152,30 @@ service cloud.firestore {
     }
 
     // Only the two partners in the couple can access their onboarding doc.
+    //
+    // Path-based (like coupleTasks below) rather than resource-based, and
+    // that difference is load-bearing: OnboardingService attaches its
+    // snapshot listener when the negotiation screen opens, which is BEFORE
+    // either partner has submitted, so before the document exists. On a
+    // missing document `resource` is null, so a rule reading
+    // resource.data.user1Id evaluates to a denial — and Firestore tears down
+    // a listener that takes permission-denied instead of retrying it. Both
+    // partners then sat on "waiting for your partner" forever, because
+    // neither client ever received the other's submission.
     match /onboardingTasks/{coupleKey} {
-      allow read: if authed() && (
-        request.auth.uid == resource.data.user1Id ||
-        request.auth.uid == resource.data.user2Id
-      );
-      allow create: if authed() && (
-        request.auth.uid == request.resource.data.user1Id ||
-        request.auth.uid == request.resource.data.user2Id
-      );
-      allow update: if authed() && (
-        request.auth.uid == resource.data.user1Id ||
-        request.auth.uid == resource.data.user2Id
-      );
+      allow read, create, update: if authed() && isMyCoupleKey(coupleKey);
     }
 
     // Couple tasks — keyed by coupleKey (uid1_uid2 sorted); only the two
     // partners whose uids form the key can access it.
     match /coupleTasks/{coupleKey} {
-      allow read, write: if authed()
-        && request.auth.uid in coupleKey.split('_');
+      allow read, write: if authed() && isMyCoupleKey(coupleKey);
     }
 
     // Couple metadata (anniversary date) — only the two partners whose
     // uids form the coupleKey can access it.
     match /coupleMeta/{coupleKey} {
-      allow read, write: if authed()
-        && request.auth.uid in coupleKey.split('_');
+      allow read, write: if authed() && isMyCoupleKey(coupleKey);
     }
 
     // Couple challenges (quiz / photo dash / anniversary race).
@@ -138,10 +189,16 @@ service cloud.firestore {
         && request.auth.uid == request.resource.data.createdBy
         && request.auth.uid in request.resource.data.participants
         && request.resource.data.get('cardAwarded', false) == false;
+      // Photo-dash claims legitimately set status/winnerId/photoData, so
+      // those stay open — but a participant may only ever touch their OWN
+      // key in `answers`, otherwise either partner could rewrite the other's
+      // quiz answer to force a match.
       allow update: if authed()
         && request.auth.uid in resource.data.participants
         && resource.data.status == 'active'
-        && request.resource.data.get('cardAwarded', false) == false;
+        && request.resource.data.get('cardAwarded', false) == false
+        && request.resource.data.get('answers', {}).diff(resource.data.get('answers', {}))
+             .affectedKeys().hasOnly([request.auth.uid]);
     }
 
     // Redeemed "Whatever I Want" cards. Sender creates; the receiver can
@@ -158,12 +215,26 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fulfilled']);
     }
 
+    // Roses — doc id is the receiver's uid. Written only by the sendRoses
+    // callable (it costs treats). The receiver reads for their bouquet;
+    // their partner (the sender) reads to see the bouquet on the
+    // partner's scene too.
+    match /roses/{userId} {
+      allow read: if authed() && (
+        request.auth.uid == userId ||
+        get(/databases/$(database)/documents/users/$(userId)).data.partnerId == request.auth.uid
+      );
+    }
+
     // Belly rubs — doc id is the receiver's uid. The receiver reads
-    // (their own incoming-rub listener); only their partner can send.
+    // (their own incoming-rub listener); only their partner can send, and
+    // must stamp the write with their own uid so the display name shown in
+    // the recipient's toast cannot be spoofed.
     match /bellyRubs/{userId} {
       allow read: if authed() && request.auth.uid == userId;
       allow write: if authed()
-        && get(/databases/$(database)/documents/users/$(userId)).data.partnerId == request.auth.uid;
+        && get(/databases/$(database)/documents/users/$(userId)).data.partnerId == request.auth.uid
+        && request.resource.data.fromUserId == request.auth.uid;
     }
   }
 }

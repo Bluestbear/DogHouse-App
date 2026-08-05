@@ -9,6 +9,7 @@
 @preconcurrency import AVFoundation
 import SwiftUI
 import Combine
+import OSLog
 
 final class SoundService: ObservableObject {
     static let shared = SoundService()
@@ -19,8 +20,13 @@ final class SoundService: ObservableObject {
         }
     }
 
-    private var audioEngine: AVAudioEngine?
-    private var playerNode: AVAudioPlayerNode?
+    /// Engines that are still playing, held until their buffer finishes.
+    ///
+    /// This used to be a single `audioEngine` property that each new sound
+    /// overwrote. Two sounds close together therefore dropped the last reference
+    /// to an engine that was still running, and releasing a running AVAudioEngine
+    /// is a hard crash inside CoreAudio rather than a no-op.
+    private var activeEngines: [ObjectIdentifier: AVAudioEngine] = [:]
 
     private init() {
         self.isEnabled = UserDefaults.standard.object(forKey: "soundEnabled") as? Bool ?? true
@@ -108,12 +114,14 @@ final class SoundService: ObservableObject {
 
     @MainActor
     private func playBuffer(samples: [Float], sampleRate: Double) {
+        guard !samples.isEmpty,
+              let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)
+        else { return }
+
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
 
         engine.attach(player)
-
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
         engine.connect(player, to: engine.mainMixerNode, format: format)
 
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
@@ -128,16 +136,21 @@ final class SoundService: ObservableObject {
         do {
             try engine.start()
             player.play()
+
+            // Each engine keeps its own entry until its buffer finishes, so a
+            // second sound starting mid-playback can no longer deallocate the
+            // first one out from under CoreAudio.
+            let key = ObjectIdentifier(engine)
+            activeEngines[key] = engine
+
             player.scheduleBuffer(buffer) {
-                DispatchQueue.main.async {
+                Task { @MainActor [weak self] in
                     engine.stop()
+                    self?.activeEngines[key] = nil
                 }
             }
-            // Keep references alive until playback completes
-            self.audioEngine = engine
-            self.playerNode = player
         } catch {
-            print("[SoundService] Failed to play: \(error)")
+            Logger.data.error("Sound playback failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

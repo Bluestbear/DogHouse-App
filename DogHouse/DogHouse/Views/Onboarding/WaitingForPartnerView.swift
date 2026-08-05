@@ -19,7 +19,7 @@ struct WaitingForPartnerView: View {
     @State private var pulsate = false
 
     private var myCode: String {
-        authService.userProfile?.partnerCode ?? "------"
+        authService.partnerCode ?? "------"
     }
 
     var body: some View {
@@ -49,7 +49,7 @@ struct WaitingForPartnerView: View {
                             .foregroundStyle(.secondary)
 
                         Text(myCode)
-                            .font(.system(size: 36, weight: .black, design: .monospaced))
+                            .font(.dhTimer)
                             .tracking(6)
                             .foregroundStyle(Color.dogHouseBrown)
                             .scaleEffect(pulsate ? 1.03 : 1.0)

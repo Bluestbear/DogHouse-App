@@ -6,5 +6,22 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>DogHouse uses the camera so you can snap and send a photo during a Photo Dash.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- Google Sign-In callback. This must stay identical to REVERSED_CLIENT_ID
+	     in GoogleService-Info.plist — if you ever re-download that file and the
+	     OAuth client changes, update this string to match or the sign-in flow
+	     will complete in the browser and never return to the app. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.760271967405-g1bpceb39jqmoj733b31vfqrltpagsbk</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

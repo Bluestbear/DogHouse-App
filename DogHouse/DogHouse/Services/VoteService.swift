@@ -45,7 +45,7 @@ class VoteService: ObservableObject {
             }
     }
 
-    deinit {
+    isolated deinit {
         voteListener?.remove()
     }
 

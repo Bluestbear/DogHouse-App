@@ -53,6 +53,12 @@ struct FriendsTabView: View {
                 couplesSection
             }
             .navigationTitle("Friends")
+            // AuthService is the live source of the pairing; FriendService used to
+            // resolve it once at construction and could never recover if it was
+            // unavailable at that instant.
+            .task(id: authService.userProfile?.partnerId) {
+                friendService.configure(partnerId: authService.userProfile?.partnerId)
+            }
             .alert("Remove this couple?", isPresented: .init(
                 get: { coupleToRemove != nil },
                 set: { if !$0 { coupleToRemove = nil } }
@@ -116,7 +122,7 @@ struct FriendsTabView: View {
                     }
                 }
 
-                if let code = authService.userProfile?.partnerCode {
+                if let code = authService.partnerCode {
                     Text("Your couple's code: **\(code)** (either partner's code works)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -124,6 +130,14 @@ struct FriendsTabView: View {
 
                 if showError {
                     Text(errorText)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
+                // A link that was created but can't be displayed used to be
+                // silent — the add appeared to work and the list stayed empty.
+                if let loadError = friendService.loadError {
+                    Text(loadError)
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
@@ -146,7 +160,7 @@ struct FriendsTabView: View {
                     subtitle: "Share your code with another couple to connect!",
                     actionTitle: "Copy Code"
                 ) {
-                    if let code = authService.userProfile?.partnerCode {
+                    if let code = authService.partnerCode {
                         UIPasteboard.general.string = code
                         HapticService.shared.success()
                     }
@@ -182,7 +196,8 @@ struct CoupleRow: View {
                     AvatarView(
                         avatar: DogAvatar.avatar(for: member.avatarId ?? "dog_1"),
                         mood: .happy,
-                        size: 42
+                        size: 42,
+                        blinks: false
                     )
                     .background(Circle().fill(Color(.systemBackground)).frame(width: 46, height: 46))
                 }

@@ -12,10 +12,8 @@ struct TaskConfirmationView: View {
     @EnvironmentObject var onboardingService: OnboardingService
     @EnvironmentObject var authService: AuthService
 
-    @State private var hasConfirmed = false
     @State private var showError = false
     @State private var errorText = ""
-    @State private var hasFinalizedList = false
 
     private var partnerName: String {
         authService.partnerProfile?.displayName ?? "Partner"
@@ -72,7 +70,8 @@ struct TaskConfirmationView: View {
                 .padding(.horizontal, 24)
 
                 // Confirm button or waiting state
-                if iConfirmed || hasConfirmed {
+                // Document-driven, not local-flag-driven — see TaskSubmissionView.
+                if iConfirmed {
                     if !partnerConfirmed {
                         VStack(spacing: 8) {
                             ProgressView()
@@ -124,12 +123,13 @@ struct TaskConfirmationView: View {
             }
             .padding(.bottom, 40)
         }
-        .task {
-            // Build final task list when entering this phase (only runs once)
-            if !hasFinalizedList {
-                hasFinalizedList = true
-                try? await onboardingService.buildFinalTaskListIfNeeded()
-            }
+        // Keyed on emptiness rather than run-once, so a build that failed on the
+        // first attempt (offline, say) is retried when the document next changes
+        // instead of leaving both partners staring at an empty list. Building
+        // twice is harmless: the array is a pure function of the document.
+        .task(id: finalTasks.isEmpty) {
+            guard finalTasks.isEmpty else { return }
+            try? await onboardingService.buildFinalTaskListIfNeeded()
         }
     }
 
@@ -145,7 +145,6 @@ struct TaskConfirmationView: View {
         showError = false
         do {
             try await onboardingService.confirmFinalList()
-            hasConfirmed = true
             HapticService.shared.success()
             SoundService.shared.playItemUnlock()
             // If both confirmed, finalizeOnboarding sets onboardingComplete = true

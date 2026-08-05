@@ -16,7 +16,6 @@ struct TaskSubmissionView: View {
     @State private var task2 = ""
     @State private var task3 = ""
     @State private var task4 = ""
-    @State private var hasSubmitted = false
     @State private var showError = false
     @State private var errorText = ""
 
@@ -35,7 +34,12 @@ struct TaskSubmissionView: View {
 
         ScrollView {
             VStack(spacing: 24) {
-                if iSubmitted || hasSubmitted {
+                // Driven purely by the document, never by a local "I tapped it"
+                // flag. Firestore echoes a write to the local cache immediately,
+                // so this flips without waiting for the server — and if the write
+                // is ultimately rejected, the rollback brings the form back
+                // instead of stranding the user on a spinner forever.
+                if iSubmitted {
                     // Submitted — waiting for partner
                     submittedView(partnerSubmitted: partnerSubmitted)
                 } else {
@@ -177,7 +181,6 @@ struct TaskSubmissionView: View {
         ]
         do {
             try await onboardingService.submitMyTasks(tasks)
-            hasSubmitted = true
             HapticService.shared.success()
         } catch {
             errorText = error.localizedDescription

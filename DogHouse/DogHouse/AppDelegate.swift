@@ -7,8 +7,10 @@
 
 import UIKit
 import FirebaseCore
+import FirebaseCrashlytics
 import FirebaseMessaging
 import UserNotifications
+import OSLog
 
 class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNotificationCenterDelegate {
 
@@ -18,6 +20,11 @@ class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNot
     ) -> Bool {
         FirebaseApp.configure()
 
+        // Crash reporting. Collection is opt-out at the Firebase console
+        // level; no user content is attached to reports, only the uid set in
+        // AuthService so a crash can be tied back to a support request.
+        Crashlytics.crashlytics().setCrashlyticsCollectionEnabled(true)
+
         // Push notification setup. The permission request itself happens in
         // the UI (explainer screen / MainTabView) — never cold at launch.
         Messaging.messaging().delegate = self
@@ -26,9 +33,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNot
 
         // Already-authorized users still need APNs registration every launch
         UNUserNotificationCenter.current().getNotificationSettings { settings in
+            // Read the value out here: UNNotificationSettings is not Sendable,
+            // so capturing it in the Task would cross isolation. The status
+            // enum itself is.
+            let status = settings.authorizationStatus
             Task { @MainActor in
-                NotificationService.shared.authStatus = settings.authorizationStatus
-                if settings.authorizationStatus == .authorized {
+                NotificationService.shared.authStatus = status
+                if status == .authorized {
                     NotificationService.registerForRemoteNotifications()
                 }
             }
@@ -57,7 +68,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNot
         _ application: UIApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
-        print("Failed to register for remote notifications: \(error.localizedDescription)")
+        Logger.push.error("APNs registration failed: \(error.localizedDescription, privacy: .public)")
     }
 
     // MARK: - MessagingDelegate

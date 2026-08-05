@@ -38,7 +38,7 @@ class FeedService: ObservableObject {
         startListening()
     }
 
-    deinit {
+    isolated deinit {
         feedListener?.remove()
     }
 

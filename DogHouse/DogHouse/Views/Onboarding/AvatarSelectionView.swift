@@ -64,7 +64,7 @@ struct AvatarSelectionView: View {
                 LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(DogAvatar.allAvatars) { avatar in
                         VStack(spacing: 4) {
-                            AvatarView(avatar: avatar, mood: .happy, size: 60)
+                            AvatarView(avatar: avatar, mood: .happy, size: 60, blinks: false)
                                 .overlay(
                                     Circle()
                                         .stroke(selectedId == avatar.id ? Color.cozyOrange : .clear, lineWidth: 3)

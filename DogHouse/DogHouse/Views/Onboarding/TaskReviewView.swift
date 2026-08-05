@@ -14,7 +14,6 @@ struct TaskReviewView: View {
     @EnvironmentObject var authService: AuthService
 
     @State private var strikes: [String: String] = [:]  // taskId → replacement title
-    @State private var hasReviewed = false
     @State private var showError = false
     @State private var errorText = ""
 
@@ -38,7 +37,8 @@ struct TaskReviewView: View {
 
         ScrollView {
             VStack(spacing: 24) {
-                if myReviewDone || hasReviewed {
+                // Document-driven, not local-flag-driven — see TaskSubmissionView.
+                if myReviewDone {
                     waitingView(partnerReviewDone: partnerReviewDone)
                 } else {
                     reviewFormView
@@ -216,7 +216,6 @@ struct TaskReviewView: View {
         let strikeList = strikes.map { TaskStrike(originalTaskId: $0.key, replacementTitle: $0.value) }
         do {
             try await onboardingService.submitReview(strikes: strikeList)
-            hasReviewed = true
             HapticService.shared.success()
         } catch {
             errorText = error.localizedDescription

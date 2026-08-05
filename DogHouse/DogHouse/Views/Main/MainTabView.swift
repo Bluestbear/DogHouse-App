@@ -12,9 +12,10 @@ struct MainTabView: View {
     @StateObject private var challengeService = ChallengeService(userId: "mock_user", partnerId: "mock_partner")
     @State private var selectedTab: AppTab = .home
     @State private var showPermissionExplainer = false
+    @State private var showWhatsNew = false
 
     enum AppTab: Hashable {
-        case home, friends, shop, profile
+        case home, friends, shop, profile, input
     }
 
     var body: some View {
@@ -38,6 +39,11 @@ struct MainTabView: View {
                 ProfileTabView(challengeService: challengeService)
                     .environmentObject(authService)
             }
+
+            Tab("Input", systemImage: "envelope.fill", value: AppTab.input) {
+                InputTabView()
+                    .environmentObject(authService)
+            }
         }
         .tint(Color.dogHouseBrown)
         // Notification taps route to the right tab
@@ -58,6 +64,20 @@ struct MainTabView: View {
         }
         .sheet(isPresented: $showPermissionExplainer) {
             NotificationPermissionView(notificationService: notificationService)
+        }
+        // One-time "what's new" for accounts that predate this update.
+        // New users get the same info in the onboarding tour instead.
+        .onChange(of: authService.userProfile?.id, initial: true) { _, _ in
+            guard let profile = authService.userProfile,
+                  !UserDefaults.standard.bool(forKey: WhatsNew.seenKey) else { return }
+            // Mark seen either way so new users never get it later
+            UserDefaults.standard.set(true, forKey: WhatsNew.seenKey)
+            if profile.createdAt < WhatsNew.releaseDate {
+                showWhatsNew = true
+            }
+        }
+        .sheet(isPresented: $showWhatsNew) {
+            WhatsNewView()
         }
     }
 }

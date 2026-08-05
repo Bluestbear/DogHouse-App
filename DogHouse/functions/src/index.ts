@@ -10,6 +10,8 @@ import {
 } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onCall, HttpsError, CallableRequest } from "firebase-functions/v2/https";
+import { defineSecret } from "firebase-functions/params";
+import * as nodemailer from "nodemailer";
 
 const REGION = "europe-west1";
 
@@ -18,6 +20,7 @@ const MAX_GRACE_CHARGES = 3;
 const GRACE_RECHARGE_HOURS = 24;
 const IMMUNITY_SECONDS = 3600;
 const REDEMPTION_TREATS = 15;
+const ROSES_COST = 5;
 
 // Cosmetic prices, keyed by item id — mirrors CosmeticItem.catalog in Swift.
 // The server validates cost against this so clients can't spoof prices.
@@ -53,6 +56,49 @@ function coupleKeyOf(a: string, b: string): string {
   return [a, b].sort().join("_");
 }
 
+/**
+ * Run a spend exactly once per client-supplied key.
+ *
+ * The client retries transient failures, and a call whose response was lost
+ * in flight may already have committed on the server. Without this, that
+ * retry charges the user twice. The key doc is claimed with create(), which
+ * fails atomically if another attempt got there first; the stored result is
+ * then replayed instead of re-running the operation.
+ *
+ * Keys are per-user, so one client cannot suppress another's action.
+ * `cleanupIdempotencyKeys` prunes them daily.
+ */
+async function once<T extends Record<string, unknown>>(
+  uid: string,
+  key: unknown,
+  operation: () => Promise<T>
+): Promise<T> {
+  // No key (older client) — run unguarded rather than reject.
+  if (typeof key !== "string" || !key) return operation();
+
+  const ref = db.collection("idempotencyKeys").doc(`${uid}_${key}`);
+  try {
+    await ref.create({ uid, createdAt: Timestamp.now(), status: "pending" });
+  } catch {
+    // Key already claimed: this is a retry of a call that reached us.
+    const existing = (await ref.get()).data();
+    if (existing?.status === "done") {
+      return (existing.result ?? {}) as T;
+    }
+    throw new HttpsError("aborted", "That action is already being processed.");
+  }
+
+  try {
+    const result = await operation();
+    await ref.update({ status: "done", result });
+    return result;
+  } catch (err) {
+    // Let the next attempt genuinely re-run rather than replaying a failure.
+    await ref.delete().catch(() => undefined);
+    throw err;
+  }
+}
+
 // Initialize at module scope and pass the app handle explicitly to each
 // service. Relying on default-app lookup (getFirestore() with no args)
 // failed in production with "The default Firebase app does not exist".
@@ -74,6 +120,37 @@ interface NotifyOptions {
   category?: string;
 }
 
+/** Owner-only document holding a user's push token and pairing code. */
+function privateDataRef(userId: string) {
+  return db.collection("users").doc(userId).collection("private").doc("data");
+}
+
+/**
+ * Resolve a push token from the private document, falling back to the legacy
+ * field on the public user document for accounts that have not yet run the
+ * client migration. The fallback can be deleted once backfillPrivateUserData
+ * reports zero remaining legacy documents.
+ */
+async function fcmTokenFor(userId: string): Promise<string | undefined> {
+  const priv = await privateDataRef(userId).get();
+  const token = priv.data()?.fcmToken as string | undefined;
+  if (token) return token;
+
+  const legacy = await db.collection("users").doc(userId).get();
+  return legacy.data()?.fcmToken as string | undefined;
+}
+
+/** Drop a token FCM has told us is permanently dead. */
+async function clearDeadToken(userId: string): Promise<void> {
+  await Promise.all([
+    privateDataRef(userId).set({ fcmToken: FieldValue.delete() }, { merge: true }),
+    db.collection("users").doc(userId)
+      .update({ fcmToken: FieldValue.delete() })
+      .catch(() => undefined), // legacy field may already be gone
+  ]);
+  logger.info(`[notifyUser] Cleared unregistered token for userId=${userId}`);
+}
+
 async function notifyUser(
   userId: string,
   title: string,
@@ -81,13 +158,11 @@ async function notifyUser(
   options: NotifyOptions = {}
 ): Promise<void> {
   try {
-    const userDoc = await db.collection("users").doc(userId).get();
-    const fcmToken = userDoc.data()?.fcmToken as string | undefined;
+    const fcmToken = await fcmTokenFor(userId);
     if (!fcmToken) {
       logger.warn(`[notifyUser] No FCM token for userId=${userId}`);
       return;
     }
-    logger.info(`[notifyUser] Sending "${title}" to userId=${userId}, token=${fcmToken.substring(0, 20)}...`);
 
     await messaging.send({
       token: fcmToken,
@@ -109,6 +184,20 @@ async function notifyUser(
     });
     logger.info(`[notifyUser] Successfully sent to userId=${userId}`);
   } catch (err) {
+    // A token that FCM reports as unregistered will never work again — the
+    // app was deleted or the token rotated. Left in place these accumulate
+    // forever and every future send burns a wasted call.
+    const code = (err as { errorInfo?: { code?: string }; code?: string })
+      ?.errorInfo?.code ?? (err as { code?: string })?.code;
+    if (
+      code === "messaging/registration-token-not-registered" ||
+      code === "messaging/invalid-registration-token" ||
+      code === "messaging/invalid-argument"
+    ) {
+      await clearDeadToken(userId).catch((e) =>
+        logger.error(`[notifyUser] Token cleanup failed for ${userId}:`, e));
+      return;
+    }
     logger.error(`[notifyUser] Failed to notify userId=${userId}:`, err);
   }
 }
@@ -201,6 +290,50 @@ export const onDoghouseEvent = onDocumentWritten(
         );
       }
     }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────
+// 1b. Mutual pairing — clients can only write their OWN partnerId
+//     (security rules). When user A sets partnerId=B, this trigger
+//     completes the link by setting B.partnerId=A, so the partner
+//     sitting on the "waiting" screen advances without entering a
+//     code themselves. No loop: when B's doc updates, A already
+//     points at B, so the trigger no-ops.
+// ─────────────────────────────────────────────────────────────
+export const onUserPaired = onDocumentUpdated(
+  { document: "users/{uid}", region: REGION },
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!after) return;
+
+    const uid = event.params.uid;
+    const newPartnerId = after.partnerId as string | undefined;
+    if (!newPartnerId || newPartnerId === "skipped") return;
+    if (before?.partnerId === newPartnerId) return; // not a new pairing
+
+    const partnerRef = db.collection("users").doc(newPartnerId);
+    const partnerSnap = await partnerRef.get();
+    if (!partnerSnap.exists) return;
+    const partnerCurrent = partnerSnap.data()?.partnerId as string | undefined;
+
+    if (partnerCurrent === uid) return; // already mutual — nothing to do
+    if (partnerCurrent && partnerCurrent !== "skipped") {
+      // Partner is paired with someone else; don't steal them.
+      logger.warn(`[pairing] ${uid} → ${newPartnerId}, but they're paired with ${partnerCurrent}`);
+      return;
+    }
+
+    await partnerRef.update({ partnerId: uid });
+    const myName = (after.displayName as string | undefined) ?? "Your partner";
+    await notifyUser(
+      newPartnerId,
+      "❤️ You're paired!",
+      `${myName} connected with you on DogHouse. Let the games begin!`,
+      { data: { type: "doghouse" } }
+    );
+    logger.info(`[pairing] Completed mutual pairing ${uid} ↔ ${newPartnerId}`);
   }
 );
 
@@ -535,6 +668,44 @@ export const resolveExpiredVotes = onSchedule(
 );
 
 // ─────────────────────────────────────────────────────────────
+// 7b. Feedback → email. The Input tab writes feedback/{id}; this
+//     emails it to the developer via Gmail. Requires the
+//     GMAIL_APP_PASSWORD secret (a Google "app password" for the
+//     developer's account). The Firestore doc is the source of
+//     truth — if email fails, the feedback is still saved.
+// ─────────────────────────────────────────────────────────────
+const FEEDBACK_EMAIL = "harrisonkennykrampe@gmail.com";
+const gmailAppPassword = defineSecret("GMAIL_APP_PASSWORD");
+
+export const onFeedbackCreated = onDocumentCreated(
+  { document: "feedback/{feedbackId}", region: REGION, secrets: [gmailAppPassword] },
+  async (event) => {
+    const fb = event.data?.data();
+    if (!fb) return;
+
+    const kind: string = fb.type ?? "feedback";
+    const fromName: string = fb.fromName ?? "Unknown";
+    const text: string = fb.text ?? "";
+
+    try {
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: FEEDBACK_EMAIL, pass: gmailAppPassword.value() },
+      });
+      await transporter.sendMail({
+        from: `"DogHouse App" <${FEEDBACK_EMAIL}>`,
+        to: FEEDBACK_EMAIL,
+        subject: `[DogHouse ${kind}] from ${fromName}`,
+        text: `${text}\n\n— ${fromName} (uid: ${fb.fromUserId ?? "?"})`,
+      });
+      logger.info(`[feedback] Emailed ${kind} from ${fromName}`);
+    } catch (err) {
+      logger.error("[feedback] Email failed (doc is still in Firestore):", err);
+    }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────
 // 8. Account deletion — client writes deletionRequests/{uid};
 //    this function wipes all their data and the Auth account.
 // ─────────────────────────────────────────────────────────────
@@ -577,13 +748,48 @@ export const onDeletionRequest = onDocumentCreated(
         .get();
       await Promise.all(coupleLinks.docs.map((d) => d.ref.delete()));
 
+      async function deleteArrayContains(
+        collection: string,
+        field: string,
+        value: string
+      ): Promise<void> {
+        const snap = await db.collection(collection)
+          .where(field, "array-contains", value).get();
+        await Promise.all(snap.docs.map((d) => d.ref.delete()));
+      }
+
       // Delete owned/related documents
       await deleteWhere("partnerCodes", "userId", uid);
       await deleteWhere("feedPosts", "senderId", uid);
       await deleteWhere("feedPosts", "receiverId", uid);
       await deleteWhere("doghouseEvents", "senderId", uid);
       await deleteWhere("doghouseEvents", "receiverId", uid);
+      await deleteWhere("wishes", "fromUserId", uid);
+      await deleteWhere("wishes", "toUserId", uid);
+      await deleteWhere("feedback", "fromUserId", uid);
+      await deleteArrayContains("challenges", "participants", uid);
+      await deleteArrayContains("voteEvents", "audienceIds", uid);
       await db.collection("bellyRubs").doc(uid).delete();
+      await db.collection("roses").doc(uid).delete();
+
+      // Couple-scoped documents are keyed by the sorted uid pair, so they
+      // are only reachable while we still know who the partner was.
+      if (partnerId && partnerId !== "skipped") {
+        const key = coupleKeyOf(uid, partnerId);
+        await Promise.all([
+          db.collection("coupleTasks").doc(key).delete(),
+          db.collection("coupleMeta").doc(key).delete(),
+          db.collection("onboardingTasks").doc(key).delete(),
+        ]);
+      }
+
+      // Subcollections are NOT removed when the parent document is deleted.
+      // Without this the owner-only private document — pairing code and push
+      // token — would outlive the account it belongs to.
+      const privateDocs = await db.collection("users").doc(uid)
+        .collection("private").listDocuments();
+      await Promise.all(privateDocs.map((d) => d.delete()));
+
       await db.collection("users").doc(uid).delete();
 
       // Delete the Firebase Auth account
@@ -613,33 +819,30 @@ export const onChallengeWritten = onDocumentWritten(
     const ref = event.data!.after.ref;
     const participants: string[] = after.participants ?? [];
 
-    // Quiz: resolve once both partners have answered
+    // Quiz: resolve once both partners have answered. Quizzes have no
+    // winner — the fun is finding out whether the answers match.
     if (
       after.type === "quiz" &&
       after.status === "active" &&
       participants.length === 2 &&
-      participants.every((uid) => after.answers?.[uid]?.own && after.answers?.[uid]?.guess)
+      participants.every((uid) => after.answers?.[uid]?.own)
     ) {
       const [a, b] = participants;
-      const aRight = after.answers[a].guess === after.answers[b].own;
-      const bRight = after.answers[b].guess === after.answers[a].own;
-      let winnerId: string | null = null;
-      if (aRight && !bRight) winnerId = a;
-      if (bRight && !aRight) winnerId = b;
+      const aOwn: string = after.answers[a].own;
+      const bOwn: string = after.answers[b].own;
       await ref.update({
         status: "completed",
-        winnerId,
+        winnerId: null,
         completedAt: Timestamp.now(),
       });
-      if (!winnerId) {
-        const result = aRight
-          ? "You BOTH know each other too well. It's a tie! 🤝"
-          : "Neither of you guessed right... awkward 😅 It's a tie!";
-        await notifyUsers(participants, "🧠 Quiz over!", result, {
-          data: { type: "challenge" },
-        });
-      }
-      return; // the update above re-triggers this function for the award
+      const result =
+        aOwn === bOwn
+          ? `You both picked "${aOwn}" — a perfect match! 💞`
+          : "You picked different answers... time to compare notes 😅";
+      await notifyUsers(participants, "🧠 Quiz over!", result, {
+        data: { type: "challenge" },
+      });
+      return;
     }
 
     // Award: any completed challenge with a winner grants one card (once)
@@ -746,100 +949,123 @@ async function audienceForCouple(uid: string, partnerId: string): Promise<string
 // Send partner to the doghouse — validates immunity + grace server-side.
 export const sendToDoghouse = onCall({ region: REGION }, async (req) => {
   const uid = requireAuth(req);
-  const reason: string = (req.data?.reason ?? "").toString().slice(0, 500);
-  const suggestion: string | null = req.data?.suggestion
-    ? req.data.suggestion.toString().slice(0, 500) : null;
-  const isPublic = req.data?.isPublic === true;
-  if (!reason) throw new HttpsError("invalid-argument", "A reason is required.");
+  return once(uid, req.data?.idempotencyKey, async () => {
+    const reason: string = (req.data?.reason ?? "").toString().slice(0, 500);
+    const suggestion: string | null = req.data?.suggestion
+      ? req.data.suggestion.toString().slice(0, 500) : null;
+    const isPublic = req.data?.isPublic === true;
+    if (!reason) throw new HttpsError("invalid-argument", "A reason is required.");
 
-  const meRef = db.collection("users").doc(uid);
-  const meSnap = await meRef.get();
-  const me = meSnap.data();
-  const partnerId: string | undefined = me?.partnerId;
-  if (!partnerId || partnerId === "skipped") {
-    throw new HttpsError("failed-precondition", "You have no partner.");
-  }
+    const meRef = db.collection("users").doc(uid);
+    const partnerId: string | undefined = (await meRef.get()).data()?.partnerId;
+    if (!partnerId || partnerId === "skipped") {
+      throw new HttpsError("failed-precondition", "You have no partner.");
+    }
+    const partnerRef = db.collection("users").doc(partnerId);
 
-  const partnerSnap = await db.collection("users").doc(partnerId).get();
-  const partner = partnerSnap.data() ?? {};
-  const immunity = partner.immunityUntil as Timestamp | undefined;
-  if (immunity && immunity.toMillis() > Date.now()) {
-    throw new HttpsError("failed-precondition",
-      "Your partner has immunity! They can't be sent yet.");
-  }
+    // The friend audience is not part of the race, so it is resolved before the
+    // transaction — queries inside a transaction would be re-run on every retry.
+    const audience = isPublic ? await audienceForCouple(uid, partnerId) : [];
 
-  const stored = (me?.graceCharges as number | undefined) ?? MAX_GRACE_CHARGES;
-  const effective = effectiveGraceCharges(stored, me?.lastGraceRecharge as Timestamp | undefined);
-  if (effective <= 0) {
-    throw new HttpsError("resource-exhausted",
-      "You're out of grace! Wait for it to recharge (1 per day).");
-  }
+    // Grace is checked and spent inside a transaction. Previously this read the
+    // balance, then wrote `effective - 1` as an absolute value from that stale
+    // read: two sends fired close together both computed the same figure and
+    // both wrote it, so the second sending was free.
+    const key = coupleKeyOf(uid, partnerId);
+    const eventRef = db.collection("doghouseEvents").doc();
 
-  const now = Timestamp.now();
-  const key = coupleKeyOf(uid, partnerId);
-  const eventRef = db.collection("doghouseEvents").doc();
-  const batch = db.batch();
-  batch.set(eventRef, {
-    senderId: uid, receiverId: partnerId, reason, suggestion,
-    startedAt: now, endedAt: null, isActive: true, coupleKey: key,
-  });
-  batch.update(meRef, {
-    graceCharges: effective - 1,
-    lastGraceRecharge: now,
-  });
+    const graceRemaining = await db.runTransaction(async (tx) => {
+      const [meSnap, partnerSnap] = await Promise.all([
+        tx.get(meRef),
+        tx.get(partnerRef),
+      ]);
+      const me = meSnap.data() ?? {};
+      const partner = partnerSnap.data() ?? {};
 
-  if (isPublic) {
-    const audience = await audienceForCouple(uid, partnerId);
-    const postRef = db.collection("feedPosts").doc();
-    batch.set(postRef, {
-      eventId: eventRef.id, senderId: uid, receiverId: partnerId,
-      senderName: me?.displayName ?? "Someone",
-      receiverName: partner.displayName ?? "their partner",
-      senderAvatarId: me?.avatarId ?? "dog_1",
-      receiverAvatarId: partner.avatarId ?? "dog_1",
-      reason, createdAt: now, status: "active", audienceIds: audience,
-      reactions: {}, coupleKey: key,
+      const immunity = partner.immunityUntil as Timestamp | undefined;
+      if (immunity && immunity.toMillis() > Date.now()) {
+        throw new HttpsError("failed-precondition",
+          "Your partner has immunity! They can't be sent yet.");
+      }
+
+      const stored = (me.graceCharges as number | undefined) ?? MAX_GRACE_CHARGES;
+      const effective = effectiveGraceCharges(
+        stored, me.lastGraceRecharge as Timestamp | undefined);
+      if (effective <= 0) {
+        throw new HttpsError("resource-exhausted",
+          "You're out of grace! Wait for it to recharge (1 per day).");
+      }
+
+      const now = Timestamp.now();
+      tx.set(eventRef, {
+        senderId: uid, receiverId: partnerId, reason, suggestion,
+        startedAt: now, endedAt: null, isActive: true, coupleKey: key,
+      });
+      tx.update(meRef, {
+        graceCharges: effective - 1,
+        lastGraceRecharge: now,
+      });
+
+      if (isPublic) {
+        tx.set(db.collection("feedPosts").doc(), {
+          eventId: eventRef.id, senderId: uid, receiverId: partnerId,
+          senderName: me.displayName ?? "Someone",
+          receiverName: partner.displayName ?? "their partner",
+          senderAvatarId: me.avatarId ?? "dog_1",
+          receiverAvatarId: partner.avatarId ?? "dog_1",
+          reason, createdAt: now, status: "active", audienceIds: audience,
+          reactions: {}, coupleKey: key,
+        });
+      }
+      return effective - 1;
     });
-  }
-  await batch.commit();
-  return { ok: true, graceRemaining: effective - 1 };
+
+    return { ok: true, graceRemaining };
+  });
 });
 
 // Release partner (or confirm redemption) — grants immunity + reward server-side.
 export const releasePartner = onCall({ region: REGION }, async (req) => {
   const uid = requireAuth(req);
-  const eventId: string = req.data?.eventId;
-  const byRedemption = req.data?.byRedemption === true;
-  if (!eventId) throw new HttpsError("invalid-argument", "Missing eventId.");
+  return once(uid, req.data?.idempotencyKey, async () => {
+    const eventId: string = req.data?.eventId;
+    const byRedemption = req.data?.byRedemption === true;
+    if (!eventId) throw new HttpsError("invalid-argument", "Missing eventId.");
 
-  const ref = db.collection("doghouseEvents").doc(eventId);
-  const snap = await ref.get();
-  const ev = snap.data();
-  if (!ev || ev.senderId !== uid) {
-    throw new HttpsError("permission-denied", "Only the sender can release.");
-  }
-  if (ev.isActive !== true) return { ok: true };
+    const ref = db.collection("doghouseEvents").doc(eventId);
 
-  const now = Timestamp.now();
-  const receiverId: string = ev.receiverId;
-  const batch = db.batch();
-  batch.update(ref, {
-    isActive: false, endedAt: now,
-    releasedBy: byRedemption ? "redemption" : "sender",
+    // Transactional so the isActive check and the release cannot interleave:
+    // two concurrent releases previously both saw an active event and both
+    // credited REDEMPTION_TREATS.
+    const now = Timestamp.now();
+    const alreadyReleased = await db.runTransaction(async (tx) => {
+      const ev = (await tx.get(ref)).data();
+      if (!ev || ev.senderId !== uid) {
+        throw new HttpsError("permission-denied", "Only the sender can release.");
+      }
+      if (ev.isActive !== true) return true;
+
+      tx.update(ref, {
+        isActive: false, endedAt: now,
+        releasedBy: byRedemption ? "redemption" : "sender",
+      });
+      // Grant the released dog immunity (was previously a client self-write)
+      tx.update(db.collection("users").doc(ev.receiverId as string), {
+        immunityUntil: Timestamp.fromMillis(now.toMillis() + IMMUNITY_SECONDS * 1000),
+        ...(byRedemption ? { treats: FieldValue.increment(REDEMPTION_TREATS) } : {}),
+      });
+      return false;
+    });
+
+    if (alreadyReleased) return { ok: true };
+
+    // Close any public feed post for this sending
+    const posts = await db.collection("feedPosts")
+      .where("eventId", "==", eventId).where("status", "==", "active").get();
+    await Promise.all(posts.docs.map((p) =>
+      p.ref.update({ status: "released", endedAt: now })));
+    return { ok: true };
   });
-  // Grant the released dog immunity (was previously a client self-write)
-  batch.update(db.collection("users").doc(receiverId), {
-    immunityUntil: Timestamp.fromMillis(now.toMillis() + IMMUNITY_SECONDS * 1000),
-    ...(byRedemption ? { treats: FieldValue.increment(REDEMPTION_TREATS) } : {}),
-  });
-  await batch.commit();
-
-  // Close any public feed post for this sending
-  const posts = await db.collection("feedPosts")
-    .where("eventId", "==", eventId).where("status", "==", "active").get();
-  await Promise.all(posts.docs.map((p) =>
-    p.ref.update({ status: "released", endedAt: now })));
-  return { ok: true };
 });
 
 // Request redemption — the dog flags they made it up (only their own event).
@@ -856,43 +1082,100 @@ export const requestRedemption = onCall({ region: REGION }, async (req) => {
   return { ok: true };
 });
 
+// Send roses to the partner — costs treats, so it must run server-side.
+// Works like a belly rub: writes roses/{partnerId} (the partner's client
+// listens on that doc for the in-app burst) and sends a push.
+export const sendRoses = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  return once(uid, req.data?.idempotencyKey, async () => {
+    const meRef = db.collection("users").doc(uid);
+
+    // Balance check and debit must be atomic: reading treats and then writing
+    // increment(-cost) outside a transaction let two rapid taps both pass the
+    // affordability check and drive the balance negative.
+    const { partnerId, fromName, treatsRemaining } = await db.runTransaction(
+      async (tx) => {
+        const me = (await tx.get(meRef)).data() ?? {};
+        const pid = me.partnerId as string | undefined;
+        if (!pid || pid === "skipped") {
+          throw new HttpsError("failed-precondition", "You have no partner.");
+        }
+
+        const treats = (me.treats as number | undefined) ?? 100;
+        if (treats < ROSES_COST) {
+          throw new HttpsError("failed-precondition",
+            `Roses cost ${ROSES_COST} treats — you only have ${treats} 🦴`);
+        }
+
+        const name = (me.displayName as string | undefined) ?? "Your partner";
+        tx.update(meRef, { treats: FieldValue.increment(-ROSES_COST) });
+        tx.set(db.collection("roses").doc(pid), {
+          fromUserId: uid,
+          fromDisplayName: name,
+          sentAt: Timestamp.now(),
+        });
+        return { partnerId: pid, fromName: name, treatsRemaining: treats - ROSES_COST };
+      }
+    );
+
+    await notifyUser(
+      partnerId,
+      "🌹 Roses for you!",
+      `${fromName} sent you roses ❤️`,
+      { data: { type: "roses" } }
+    );
+    return { ok: true, treatsRemaining };
+  });
+});
+
 // Purchase a cosmetic — for self or as a gift to the partner.
 export const purchaseCosmetic = onCall({ region: REGION }, async (req) => {
   const uid = requireAuth(req);
-  const itemId: string = req.data?.itemId;
-  const forPartner = req.data?.forPartner === true;
-  const price = COSMETIC_PRICES[itemId];
-  if (price === undefined) throw new HttpsError("invalid-argument", "Unknown item.");
+  return once(uid, req.data?.idempotencyKey, async () => {
+    const itemId: string = req.data?.itemId;
+    const forPartner = req.data?.forPartner === true;
+    const price = COSMETIC_PRICES[itemId];
+    if (price === undefined) throw new HttpsError("invalid-argument", "Unknown item.");
 
-  const meRef = db.collection("users").doc(uid);
-  const me = (await meRef.get()).data() ?? {};
-  const treats = (me.treats as number | undefined) ?? 100;
-  if (treats < price) {
-    throw new HttpsError("failed-precondition", "Not enough treats! Keep playing 🦴");
-  }
+    const meRef = db.collection("users").doc(uid);
 
-  let targetId = uid;
-  if (forPartner) {
-    const partnerId = me.partnerId as string | undefined;
-    if (!partnerId || partnerId === "skipped") {
-      throw new HttpsError("failed-precondition", "You have no partner to gift to.");
+    // Atomic so a double-tap cannot buy two items for the price of one.
+    const { targetId, buyerName, treatsRemaining } = await db.runTransaction(
+      async (tx) => {
+        const me = (await tx.get(meRef)).data() ?? {};
+        const treats = (me.treats as number | undefined) ?? 100;
+        if (treats < price) {
+          throw new HttpsError("failed-precondition", "Not enough treats! Keep playing 🦴");
+        }
+
+        let target = uid;
+        if (forPartner) {
+          const partnerId = me.partnerId as string | undefined;
+          if (!partnerId || partnerId === "skipped") {
+            throw new HttpsError("failed-precondition", "You have no partner to gift to.");
+          }
+          target = partnerId;
+        }
+
+        tx.update(meRef, { treats: FieldValue.increment(-price) });
+        tx.update(db.collection("users").doc(target), {
+          ownedItemIds: FieldValue.arrayUnion(itemId),
+        });
+        return {
+          targetId: target,
+          buyerName: (me.displayName as string | undefined) ?? "Your partner",
+          treatsRemaining: treats - price,
+        };
+      }
+    );
+
+    if (forPartner) {
+      await notifyUser(targetId, "🎁 A gift!",
+        `${buyerName} bought you something for your dog. Go check the shop!`,
+        { data: { type: "shop" } });
     }
-    targetId = partnerId;
-  }
-
-  const batch = db.batch();
-  batch.update(meRef, { treats: FieldValue.increment(-price) });
-  batch.update(db.collection("users").doc(targetId), {
-    ownedItemIds: FieldValue.arrayUnion(itemId),
+    return { ok: true, treatsRemaining };
   });
-  await batch.commit();
-
-  if (forPartner) {
-    await notifyUser(targetId, "🎁 A gift!",
-      `${me.displayName ?? "Your partner"} bought you something for your dog. Go check the shop!`,
-      { data: { type: "shop" } });
-  }
-  return { ok: true, treatsRemaining: treats - price };
 });
 
 // Equip / unequip a cosmetic on self or partner (validates ownership).
@@ -932,59 +1215,80 @@ export const equipCosmetic = onCall({ region: REGION }, async (req) => {
 // Award treats for time spent at home — server computes from event history.
 export const claimHomeTreats = onCall({ region: REGION }, async (req) => {
   const uid = requireAuth(req);
-  const meRef = db.collection("users").doc(uid);
-  const me = (await meRef.get()).data() ?? {};
+  return once(uid, req.data?.idempotencyKey, async () => {
+    const meRef = db.collection("users").doc(uid);
 
-  // Guard: no award while currently in the doghouse
-  const active = await db.collection("doghouseEvents")
-    .where("receiverId", "==", uid).where("isActive", "==", true).limit(1).get();
-  if (!active.empty) return { ok: true, awarded: 0 };
+    // Guard: no award while currently in the doghouse. Racing this guard is
+    // harmless (worst case one extra idle award), so it stays outside.
+    const active = await db.collection("doghouseEvents")
+      .where("receiverId", "==", uid).where("isActive", "==", true).limit(1).get();
+    if (!active.empty) return { ok: true, awarded: 0 };
 
-  const last = me.lastTreatAward as Timestamp | undefined;
-  const sinceMs = last ? last.toMillis() : Date.now() - 3_600_000;
-  const hours = Math.floor((Date.now() - sinceMs) / 3_600_000);
-  if (hours < 1) return { ok: true, awarded: 0 };
+    // Rate scales with room level (time since last release), matching the client.
+    const rate = Math.max(1, Math.min(5, Number(req.data?.treatsPerHour ?? 1)));
 
-  // Rate scales with room level (time since last release), matching the client.
-  const rate = Math.max(1, Math.min(5, Number(req.data?.treatsPerHour ?? 1)));
-  const amount = hours * rate;
-  await meRef.update({
-    treats: FieldValue.increment(amount),
-    lastTreatAward: Timestamp.now(),
+    // The elapsed-hours read and the lastTreatAward write must be atomic, or two
+    // concurrent claims each award the same accrued hours.
+    const awarded = await db.runTransaction(async (tx) => {
+      const me = (await tx.get(meRef)).data() ?? {};
+      const last = me.lastTreatAward as Timestamp | undefined;
+      const sinceMs = last ? last.toMillis() : Date.now() - 3_600_000;
+      const hours = Math.floor((Date.now() - sinceMs) / 3_600_000);
+      if (hours < 1) return 0;
+
+      const amount = hours * rate;
+      tx.update(meRef, {
+        treats: FieldValue.increment(amount),
+        lastTreatAward: Timestamp.now(),
+      });
+      return amount;
+    });
+
+    return { ok: true, awarded };
   });
-  return { ok: true, awarded: amount };
 });
 
 // Redeem a "Whatever I Want" card — server checks and decrements the balance.
 export const redeemWishCard = onCall({ region: REGION }, async (req) => {
   const uid = requireAuth(req);
-  const text: string = (req.data?.text ?? "").toString().slice(0, 300);
-  if (!text) throw new HttpsError("invalid-argument", "Say what you want!");
+  return once(uid, req.data?.idempotencyKey, async () => {
+    const text: string = (req.data?.text ?? "").toString().slice(0, 300);
+    if (!text) throw new HttpsError("invalid-argument", "Say what you want!");
 
-  const meRef = db.collection("users").doc(uid);
-  const me = (await meRef.get()).data() ?? {};
-  const cards = (me.wishCards as number | undefined) ?? 0;
-  const partnerId = me.partnerId as string | undefined;
-  if (cards <= 0) throw new HttpsError("failed-precondition", "You have no cards to redeem.");
-  if (!partnerId || partnerId === "skipped") {
-    throw new HttpsError("failed-precondition", "You have no partner.");
-  }
+    const meRef = db.collection("users").doc(uid);
 
-  const batch = db.batch();
-  batch.set(db.collection("wishes").doc(), {
-    fromUserId: uid, toUserId: partnerId,
-    fromName: me.displayName ?? "Your partner", text, createdAt: Timestamp.now(),
+    // Atomic: a card must be spendable exactly once.
+    const cardsRemaining = await db.runTransaction(async (tx) => {
+      const me = (await tx.get(meRef)).data() ?? {};
+      const cards = (me.wishCards as number | undefined) ?? 0;
+      const partnerId = me.partnerId as string | undefined;
+      if (cards <= 0) throw new HttpsError("failed-precondition", "You have no cards to redeem.");
+      if (!partnerId || partnerId === "skipped") {
+        throw new HttpsError("failed-precondition", "You have no partner.");
+      }
+
+      tx.set(db.collection("wishes").doc(), {
+        fromUserId: uid, toUserId: partnerId,
+        fromName: me.displayName ?? "Your partner", text, createdAt: Timestamp.now(),
+      });
+      tx.update(meRef, { wishCards: FieldValue.increment(-1) });
+      return cards - 1;
+    });
+
+    return { ok: true, cardsRemaining };
   });
-  batch.update(meRef, { wishCards: FieldValue.increment(-1) });
-  await batch.commit();
-  return { ok: true, cardsRemaining: cards - 1 };
 });
 
 // ─────────────────────────────────────────────────────────────
-// 12. Random photo dash — the app itself starts these. Runs a few
-//     times a day; each active couple has a small chance to get one.
+// 12. Random photo dash — the app itself starts these at random
+//     intervals through the WEEK (not daily). The scheduler ticks
+//     hourly during waking hours; each couple has a small chance
+//     per tick plus a 48h cooldown, which averages out to ~2
+//     dashes per week at unpredictable days and times.
 //     First partner to send a photo wins a Whatever-I-Want card.
 // ─────────────────────────────────────────────────────────────
+const PHOTO_DASH_CHANCE = 0.03; // per hourly tick
+const PHOTO_DASH_COOLDOWN_MS = 48 * 3_600_000;
 const PHOTO_DASH_PROMPTS = [
   "First to send a selfie wins! 🤳",
   "First to send a pic of what you're doing right now 📸",
@@ -994,7 +1298,7 @@ const PHOTO_DASH_PROMPTS = [
 ];
 
 export const randomPhotoDash = onSchedule(
-  { schedule: "0 11,15,19 * * *", timeZone: "Europe/Berlin", region: REGION },
+  { schedule: "0 9-21 * * *", timeZone: "Europe/Berlin", region: REGION },
   async () => {
     // Gather paired users, dedupe into couples by coupleKey
     const paired = await db.collection("users")
@@ -1007,13 +1311,26 @@ export const randomPhotoDash = onSchedule(
       couples.set(coupleKeyOf(uid, partnerId), [uid, partnerId]);
     });
 
+    const now = Date.now();
     for (const [key, [a, b]] of couples) {
-      // ~35% chance per tick, and never stack with an active dash
-      if (Math.random() > 0.35) continue;
-      const existing = await db.collection("challenges")
+      // Small chance per hourly tick → a couple of dashes per week,
+      // landing on random days and hours rather than daily.
+      if (Math.random() > PHOTO_DASH_CHANCE) continue;
+
+      // Cooldown: no new dash within 48h of the couple's last one,
+      // and never stack with one that's still active. (Equality-only
+      // query — no composite index needed; couples have few dashes.)
+      const previous = await db.collection("challenges")
         .where("coupleKey", "==", key).where("type", "==", "photo")
-        .where("status", "==", "active").limit(1).get();
-      if (!existing.empty) continue;
+        .get();
+      const blocked = previous.docs.some((d) => {
+        const data = d.data();
+        if (data.status === "active") return true;
+        const createdAt = data.createdAt as Timestamp | undefined;
+        return createdAt !== undefined &&
+          now - createdAt.toMillis() < PHOTO_DASH_COOLDOWN_MS;
+      });
+      if (blocked) continue;
 
       const prompt = PHOTO_DASH_PROMPTS[Math.floor(Math.random() * PHOTO_DASH_PROMPTS.length)];
       await db.collection("challenges").doc().set({
@@ -1095,3 +1412,84 @@ export const removeCoupleFriend = onCall({ region: REGION }, async (req) => {
   }
   return { ok: true };
 });
+
+// ─────────────────────────────────────────────────────────────
+// Backfill: relocate legacy secrets off the public user document.
+//
+// fcmToken and partnerCode used to live on /users/{uid}, which every signed-in
+// account could read. The client migrates its own document on next launch
+// (AuthService.migrateLegacyPrivateFields); this sweep covers accounts that
+// never open the app again.
+//
+// Safe to delete — along with the legacy fallback in fcmTokenFor — once this
+// logs "0 remaining" on a run.
+// ─────────────────────────────────────────────────────────────
+export const backfillPrivateUserData = onSchedule(
+  { schedule: "0 4 * * *", timeZone: "Europe/Berlin", region: REGION },
+  async () => {
+    const BATCH = 200;
+    let migrated = 0;
+
+    for (const field of ["partnerCode", "fcmToken"]) {
+      const snap = await db
+        .collection("users")
+        .orderBy(field)
+        .limit(BATCH)
+        .get();
+
+      for (const doc of snap.docs) {
+        const data = doc.data();
+        const priv: Record<string, unknown> = {};
+        if (data.partnerCode) priv.partnerCode = data.partnerCode;
+        if (data.fcmToken) priv.fcmToken = data.fcmToken;
+        if (Object.keys(priv).length === 0) continue;
+
+        try {
+          await privateDataRef(doc.id).set(priv, { merge: true });
+          await doc.ref.update({
+            partnerCode: FieldValue.delete(),
+            fcmToken: FieldValue.delete(),
+          });
+          migrated += 1;
+        } catch (err) {
+          logger.error(`[backfill] Failed for ${doc.id}:`, err);
+        }
+      }
+    }
+
+    // orderBy(field) only returns documents where the field exists, so an
+    // empty result means the migration is complete.
+    const remaining = (await db.collection("users")
+      .orderBy("partnerCode").limit(1).get()).size
+      + (await db.collection("users").orderBy("fcmToken").limit(1).get()).size;
+    logger.info(`[backfill] Migrated ${migrated} document(s), ${remaining} remaining`);
+  }
+);
+
+// ─────────────────────────────────────────────────────────────
+// Prune idempotency keys. A key only needs to outlive the client's retry
+// window (seconds); a day of history is generous and keeps the collection
+// from growing without bound. No security rule grants clients access to
+// this collection — the default deny applies.
+// ─────────────────────────────────────────────────────────────
+export const cleanupIdempotencyKeys = onSchedule(
+  { schedule: "30 3 * * *", timeZone: "Europe/Berlin", region: REGION },
+  async () => {
+    const cutoff = Timestamp.fromMillis(Date.now() - 24 * 3_600_000);
+    let deleted = 0;
+
+    // Bounded per run so one invocation cannot blow the memory limit.
+    for (let i = 0; i < 10; i++) {
+      const snap = await db.collection("idempotencyKeys")
+        .where("createdAt", "<", cutoff).limit(500).get();
+      if (snap.empty) break;
+
+      const batch = db.batch();
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      deleted += snap.size;
+      if (snap.size < 500) break;
+    }
+    logger.info(`[cleanupIdempotencyKeys] Deleted ${deleted} key(s)`);
+  }
+);

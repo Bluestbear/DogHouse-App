@@ -12,6 +12,8 @@ struct DoghouseScene: View {
     var avatarId: String = "dog_1"
     var cosmetics: AvatarCosmetics = .none
     var onBellyRub: (() -> Void)? = nil
+    /// Show the received rose bouquet next to the dog (fades after 5h)
+    var showRoses: Bool = false
 
     @State private var showBellyRubBurst = false
 
@@ -40,6 +42,9 @@ struct DoghouseScene: View {
     @State private var flyPhase = false
     @State private var leafDrift = false
 
+    // The scene is decorative: it is assembled from emoji and shapes
+    // that mean nothing read aloud. The accompanying status text
+    // carries the same information for VoiceOver.
     var body: some View {
         ZStack {
             // Background — gets colder/darker with degradation
@@ -146,6 +151,13 @@ struct DoghouseScene: View {
                             HeartBurstView()
                                 .scaleEffect(0.6)
                                 .allowsHitTesting(false)
+                        }
+
+                        if showRoses {
+                            Text("💐")
+                                .font(.system(size: 24))
+                                .offset(x: 34, y: 12)
+                                .transition(.scale.combined(with: .opacity))
                         }
                     }
                     .offset(x: shiverOffset, y: 30)

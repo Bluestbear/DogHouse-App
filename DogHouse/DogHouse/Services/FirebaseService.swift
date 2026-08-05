@@ -45,6 +45,12 @@ final class FirebaseService {
 
     // MARK: - Helpers
 
+    /// Owner-only companion document holding this account's secrets
+    /// (pairing code, push token). See the /users/{uid}/private rules.
+    func privateDataDocument(for userId: String) -> DocumentReference {
+        usersCollection.document(userId).collection("private").document("data")
+    }
+
     func generateDocumentID() -> String {
         db.collection("_temp").document().documentID
     }

@@ -53,6 +53,55 @@ struct OnboardingTasksDocument: Codable, Identifiable {
 
     var finalTasks: [CoupleTask]
 
+    // MARK: - Decoding
+
+    enum CodingKeys: String, CodingKey {
+        case id, coupleId
+        case user1Id, user1Tasks, user1Submitted, user1Strikes, user1ReviewComplete, user1Confirmed
+        case user2Id, user2Tasks, user2Submitted, user2Strikes, user2ReviewComplete, user2Confirmed
+        case finalTasks
+    }
+
+    /// Decodes a half-written document.
+    ///
+    /// Each partner's writes touch only their own `userN*` fields (see
+    /// `OnboardingService.submitMyTasks`), so between the first partner's
+    /// submission and the second's, every field of the other half is legitimately
+    /// absent. The synthesized initializer threw on those documents; the throw was
+    /// logged and swallowed, `taskDocument` stayed nil, and the client fell back to
+    /// the "no document yet" path — which is what made a partial document look
+    /// identical to no document at all.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+
+        // The document id IS the sorted uid pair, so it can stand in for the
+        // id fields if a write hasn't landed them yet. Order matches the
+        // sorted-uid convention used everywhere else: lower uid is user1.
+        let key = try c.decode(String.self, forKey: .id)
+        let halves = key.split(separator: "_").map(String.init)
+
+        id = key
+        coupleId = try c.decodeIfPresent(String.self, forKey: .coupleId) ?? key
+        user1Id = try c.decodeIfPresent(String.self, forKey: .user1Id)
+            ?? (halves.count == 2 ? halves[0] : "")
+        user2Id = try c.decodeIfPresent(String.self, forKey: .user2Id)
+            ?? (halves.count == 2 ? halves[1] : "")
+
+        user1Tasks = try c.decodeIfPresent([OnboardingTask].self, forKey: .user1Tasks) ?? []
+        user1Submitted = try c.decodeIfPresent(Bool.self, forKey: .user1Submitted) ?? false
+        user1Strikes = try c.decodeIfPresent([TaskStrike].self, forKey: .user1Strikes) ?? []
+        user1ReviewComplete = try c.decodeIfPresent(Bool.self, forKey: .user1ReviewComplete) ?? false
+        user1Confirmed = try c.decodeIfPresent(Bool.self, forKey: .user1Confirmed) ?? false
+
+        user2Tasks = try c.decodeIfPresent([OnboardingTask].self, forKey: .user2Tasks) ?? []
+        user2Submitted = try c.decodeIfPresent(Bool.self, forKey: .user2Submitted) ?? false
+        user2Strikes = try c.decodeIfPresent([TaskStrike].self, forKey: .user2Strikes) ?? []
+        user2ReviewComplete = try c.decodeIfPresent(Bool.self, forKey: .user2ReviewComplete) ?? false
+        user2Confirmed = try c.decodeIfPresent(Bool.self, forKey: .user2Confirmed) ?? false
+
+        finalTasks = try c.decodeIfPresent([CoupleTask].self, forKey: .finalTasks) ?? []
+    }
+
     // MARK: - User Slot
 
     enum UserSlot {

@@ -15,6 +15,9 @@ struct OnboardingContainerView: View {
     var body: some View {
         Group {
             switch currentStep {
+            case .nameEntry:
+                NameEntryView()
+
             case .waitingForPartner:
                 WaitingForPartnerView()
 
@@ -40,6 +43,7 @@ struct OnboardingContainerView: View {
     // MARK: - Step Determination
 
     private enum OnboardingStep: Equatable {
+        case nameEntry
         case waitingForPartner
         case avatarSelection
         case appTour
@@ -49,6 +53,12 @@ struct OnboardingContainerView: View {
     private var currentStep: OnboardingStep {
         guard let profile = authService.userProfile else {
             return .waitingForPartner
+        }
+
+        // Step 1: No usable name. Only reachable from Apple/Google sign-in —
+        // email sign-up collects a name in the form.
+        guard !profile.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .nameEntry
         }
 
         // Step 2: No partner yet
@@ -98,6 +108,20 @@ private struct TaskNegotiationContainer: View {
                     TaskReviewView()
                 case .confirmation, .complete:
                     TaskConfirmationView()
+                }
+            }
+            // A sync failure here used to be invisible: the screen simply waited
+            // forever. Say so instead.
+            .safeAreaInset(edge: .bottom) {
+                if let error = onboardingService.errorMessage {
+                    Text(error)
+                        .font(.dhCaption)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                        .background(.ultraThinMaterial)
                 }
             }
             .navigationTitle("Step 4 of 4")

@@ -9,11 +9,17 @@ struct UserProfile: Codable, Identifiable {
     var id: String
     var displayName: String
     var avatarId: String?
-    var partnerCode: String
+    /// LEGACY — the pairing code now lives in `UserPrivateData` on the
+    /// owner-only /users/{uid}/private/data document. This stays only so
+    /// documents written before the migration still decode; read the code
+    /// from `AuthService.partnerCode` instead.
+    var partnerCode: String?
     var partnerId: String?
     var immunityUntil: Date?
     var friendIds: [String]
     var createdAt: Date
+    /// LEGACY — see `partnerCode`. Push tokens are device identifiers and
+    /// must not sit on a document other accounts can read.
     var fcmToken: String?
     var graceCharges: Int?
     var lastGraceRecharge: Date?
@@ -53,4 +59,16 @@ struct UserProfile: Codable, Identifiable {
     var hasSelectedAvatar: Bool { avatarId != nil }
     var isTourComplete: Bool { tourComplete ?? false }
     var isOnboardingComplete: Bool { onboardingComplete ?? false }
+}
+
+// MARK: - Private Data
+
+/// Owner-only companion document at /users/{uid}/private/data. Readable and
+/// writable by its owner alone; Cloud Functions reach it with admin
+/// privileges. Nothing here may be duplicated back onto `UserProfile`.
+struct UserPrivateData: Codable {
+    /// This account's pairing code. Issued once at sign-up, immutable after.
+    var partnerCode: String?
+    /// FCM registration token for this account's current device.
+    var fcmToken: String?
 }

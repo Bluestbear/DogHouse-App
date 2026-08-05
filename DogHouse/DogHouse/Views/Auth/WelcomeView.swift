@@ -55,11 +55,11 @@ struct WelcomeView: View {
                     // Title
                     VStack(spacing: 8) {
                         Text("DogHouse")
-                            .font(.system(size: 42, weight: .bold, design: .rounded))
+                            .font(.dhDisplay)
                             .foregroundStyle(.white)
 
                         Text("Messed up? You're in the DogHouse. 🐕")
-                            .font(.system(size: 18, weight: .medium, design: .rounded))
+                            .font(.dhHeading)
                             .foregroundStyle(.white.opacity(0.9))
                     }
 
@@ -90,6 +90,8 @@ struct WelcomeView: View {
                                         .stroke(.white.opacity(0.5), lineWidth: 1)
                                 )
                         }
+
+                        SocialSignInButtons()
                     }
                     .padding(.horizontal, 32)
                     .padding(.bottom, 48)

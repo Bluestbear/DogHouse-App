@@ -33,7 +33,7 @@ struct VoteEventView: View {
                 // Header
                 VStack(spacing: 8) {
                     Text("🐕 Who Let The Dogs Out?")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .font(.dhTitle)
 
                     Text("Vote to free a dog!")
                         .font(.subheadline)
@@ -47,7 +47,7 @@ struct VoteEventView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text(timeRemaining.formattedTimer)
-                        .font(Font.system(size: 32, weight: .bold, design: .monospaced))
+                        .font(Font.dhTimer)
                         .foregroundStyle(timeRemaining < 300 ? .red : Color.cozyOrange)
                 }
                 .padding()
@@ -108,7 +108,8 @@ struct VoteEventView: View {
                     AvatarView(
                         avatar: DogAvatar.avatar(for: user.avatarId ?? "dog_1"),
                         mood: .sad,
-                        size: 44
+                        size: 44,
+                        blinks: false
                     )
                 }
 
@@ -172,7 +173,7 @@ struct VoteEventView: View {
     private var resultView: some View {
         VStack(spacing: 12) {
             Text("🎵 WHO LET THE DOGS OUT 🎵")
-                .font(.system(size: 20, weight: .black, design: .rounded))
+                .font(.dhSubtitle)
                 .foregroundStyle(Color.cozyOrange)
 
             if let winnerId = resolvedWinnerId ?? voteEvent.winnerId,

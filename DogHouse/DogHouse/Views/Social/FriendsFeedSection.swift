@@ -109,7 +109,8 @@ struct FeedPostCard: View {
                     AvatarView(
                         avatar: DogAvatar.avatar(for: post.receiverAvatarId ?? "dog_1"),
                         mood: post.isActive ? .sad : .happy,
-                        size: 44
+                        size: 44,
+                        blinks: false
                     )
                     Text(post.isActive ? "🏚️" : "🏠")
                         .font(.system(size: 15))
@@ -117,16 +118,10 @@ struct FeedPostCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    (Text(post.senderName).bold()
-                     + Text(" sent ")
-                     + Text(post.receiverName).bold()
-                     + Text(" to the DogHouse"))
+                    Text("\(Text(post.senderName).bold()) sent \(Text(post.receiverName).bold()) to the DogHouse")
                         .font(.subheadline)
 
-                    Text(post.createdAt, style: .relative)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    + Text(" ago")
+                    Text("\(Text(post.createdAt, style: .relative)) ago")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -310,7 +305,8 @@ struct TopDogLeaderboard: View {
                 AvatarView(
                     avatar: DogAvatar.avatar(for: entry.avatarId ?? "dog_1"),
                     mood: index == 0 ? .sad : .happy,
-                    size: 36
+                    size: 36,
+                    blinks: false
                 )
 
                 VStack(alignment: .leading, spacing: 2) {

@@ -43,14 +43,13 @@ struct CreateQuizSheet: View {
     @State private var optionA = ""
     @State private var optionB = ""
     @State private var own: String?
-    @State private var guess: String?
     @State private var isSending = false
     @State private var error: String?
 
     private var options: [String] { [optionA, optionB].filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty } }
     private var ready: Bool {
         !prompt.trimmingCharacters(in: .whitespaces).isEmpty
-            && options.count == 2 && own != nil && guess != nil
+            && options.count == 2 && own != nil
     }
 
     var body: some View {
@@ -63,11 +62,8 @@ struct CreateQuizSheet: View {
                     TextField("Option B", text: $optionB)
                 }
                 if options.count == 2 {
-                    Section("Your own answer") {
+                    Section("Your answer") {
                         OptionPicker(options: options, selection: $own)
-                    }
-                    Section("What will \(partnerName) pick?") {
-                        OptionPicker(options: options, selection: $guess)
                     }
                 }
                 if let error {
@@ -89,7 +85,7 @@ struct CreateQuizSheet: View {
     }
 
     private func submit() {
-        guard let own, let guess else { return }
+        guard let own else { return }
         isSending = true
         Task {
             defer { isSending = false }
@@ -98,7 +94,7 @@ struct CreateQuizSheet: View {
                     prompt: prompt.trimmingCharacters(in: .whitespaces),
                     optionA: optionA.trimmingCharacters(in: .whitespaces),
                     optionB: optionB.trimmingCharacters(in: .whitespaces),
-                    own: own, guess: guess)
+                    own: own)
                 dismiss()
             } catch { self.error = error.localizedDescription }
         }
@@ -143,7 +139,6 @@ private struct BankAnswerView: View {
     let onDone: () -> Void
 
     @State private var own: String?
-    @State private var guess: String?
     @State private var isSending = false
     @State private var error: String?
 
@@ -152,8 +147,7 @@ private struct BankAnswerView: View {
     var body: some View {
         Form {
             Section { Text(question.prompt).font(.headline) }
-            Section("Your own answer") { OptionPicker(options: options, selection: $own) }
-            Section("What will \(partnerName) pick?") { OptionPicker(options: options, selection: $guess) }
+            Section("Your answer") { OptionPicker(options: options, selection: $own) }
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
         }
         .navigationTitle("Answer")
@@ -163,19 +157,19 @@ private struct BankAnswerView: View {
                 if isSending { ProgressView() }
                 else {
                     Button("Send") {
-                        guard let own, let guess else { return }
+                        guard let own else { return }
                         isSending = true
                         Task {
                             defer { isSending = false }
                             do {
                                 try await challengeService.createQuiz(
                                     prompt: question.prompt, optionA: question.optionA,
-                                    optionB: question.optionB, own: own, guess: guess)
+                                    optionB: question.optionB, own: own)
                                 onDone()
                             } catch { self.error = error.localizedDescription }
                         }
                     }
-                    .disabled(own == nil || guess == nil)
+                    .disabled(own == nil)
                 }
             }
         }
@@ -229,7 +223,6 @@ struct QuizPlaySheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var own: String?
-    @State private var guess: String?
     @State private var isSending = false
 
     private var options: [String] { challenge.options ?? [] }
@@ -237,24 +230,23 @@ struct QuizPlaySheet: View {
     var body: some View {
         Form {
             Section { Text(challenge.prompt).font(.headline) }
-            Section("Your own answer") { OptionPicker(options: options, selection: $own) }
-            Section("What will \(partnerName) pick?") { OptionPicker(options: options, selection: $guess) }
+            Section("Your answer") { OptionPicker(options: options, selection: $own) }
             Section {
                 Button {
-                    guard let own, let guess else { return }
+                    guard let own else { return }
                     isSending = true
                     Task {
                         defer { isSending = false }
-                        try? await challengeService.answerQuiz(challenge, own: own, guess: guess)
+                        try? await challengeService.answerQuiz(challenge, own: own)
                         onDone(); dismiss()
                     }
                 } label: {
                     if isSending { ProgressView().frame(maxWidth: .infinity) }
                     else { Text("Lock it in 🔒").frame(maxWidth: .infinity) }
                 }
-                .disabled(own == nil || guess == nil || isSending)
+                .disabled(own == nil || isSending)
             } footer: {
-                Text("Guess your partner's answer right (while they get yours wrong) to win the card.")
+                Text("Once you've both answered, you'll find out if you and \(partnerName) match.")
             }
         }
         .navigationTitle("Couple Quiz")

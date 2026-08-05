@@ -31,9 +31,14 @@ struct LivingRoomScene: View {
     var avatarId: String = "dog_1"
     var cosmetics: AvatarCosmetics = .none
     var onBellyRub: (() -> Void)? = nil
+    /// Show the received rose bouquet next to the dog (fades after 5h)
+    var showRoses: Bool = false
 
     @State private var showBellyRubBurst = false
 
+    // The scene is decorative: it is assembled from emoji and shapes
+    // that mean nothing read aloud. The accompanying status text
+    // carries the same information for VoiceOver.
     var body: some View {
         ZStack {
             // Background wall — warm cream
@@ -176,6 +181,13 @@ struct LivingRoomScene: View {
                             if showBellyRubBurst {
                                 HeartBurstView()
                                     .allowsHitTesting(false)
+                            }
+
+                            if showRoses {
+                                Text("💐")
+                                    .font(.system(size: 32))
+                                    .offset(x: 46, y: 14)
+                                    .transition(.scale.combined(with: .opacity))
                             }
                         }
                         .gesture(

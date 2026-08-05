@@ -9,6 +9,7 @@
 
 import SwiftUI
 import FirebaseFirestore
+import OSLog
 
 struct TasksSheetView: View {
     @EnvironmentObject var authService: AuthService
@@ -172,7 +173,7 @@ struct TasksSheetView: View {
                 }
             }
         } catch {
-            print("Failed to load couple tasks: \(error)")
+            Logger.data.error("Couple task load failed: \(error.localizedDescription, privacy: .public)")
         }
 
         isLoading = false

@@ -97,7 +97,7 @@ struct ProfileTabView: View {
                 Text(authService.userProfile?.displayName ?? "User")
                     .font(.title2.bold())
 
-                if let code = authService.userProfile?.partnerCode {
+                if let code = authService.partnerCode {
                     HStack(spacing: 6) {
                         Text("Code:")
                             .foregroundStyle(.secondary)

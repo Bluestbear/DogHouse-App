@@ -52,7 +52,8 @@ struct AvatarPickerView: View {
                                 AvatarView(
                                     avatar: avatar,
                                     mood: .happy,
-                                    size: 72
+                                    size: 72,
+                                    blinks: false
                                 )
                                 .overlay(
                                     Circle()

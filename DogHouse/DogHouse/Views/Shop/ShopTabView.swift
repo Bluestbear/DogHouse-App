@@ -193,7 +193,8 @@ struct ShopTabView: View {
                         avatar: DogAvatar.avatar(for: displayedAvatarId),
                         mood: .happy,
                         size: 72,
-                        cosmetics: previewCosmetics
+                        cosmetics: previewCosmetics,
+                        blinks: false
                     )
                     .padding(.top, 10)
 

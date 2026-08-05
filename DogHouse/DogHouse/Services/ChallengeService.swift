@@ -9,7 +9,10 @@
 import SwiftUI
 import Combine
 import FirebaseAuth
-import FirebaseFirestore
+// @preconcurrency: the Firestore ObjC transaction API predates Sendable
+// annotation. The closure runs on Firestore's own queue and touches no
+// actor-isolated state, so the suppressed warning is not a real race.
+@preconcurrency import FirebaseFirestore
 
 class ChallengeService: ObservableObject {
     @Published var challenges: [Challenge] = []
@@ -48,7 +51,7 @@ class ChallengeService: ObservableObject {
         }
     }
 
-    deinit {
+    isolated deinit {
         challengesListener?.remove()
         metaListener?.remove()
         wishesListener?.remove()
@@ -167,10 +170,10 @@ class ChallengeService: ObservableObject {
     // MARK: - Quiz
 
     /// Create a quiz (custom prompt or picked from the bank) with the
-    /// creator's own answer + guess already filled in; the partner answers
-    /// later and the Cloud Function resolves the winner.
+    /// creator's own answer already filled in; the partner answers later
+    /// and the Cloud Function reveals whether the answers match.
     func createQuiz(prompt: String, optionA: String, optionB: String,
-                    own: String, guess: String, title: String = "Couple Quiz") async throws {
+                    own: String, title: String = "Couple Quiz") async throws {
         let (coupleKey, partnerId) = try requireCouple()
         try await fs.challengesCollection.document().setData([
             "coupleKey": coupleKey,
@@ -181,16 +184,16 @@ class ChallengeService: ObservableObject {
             "createdBy": userId,
             "participants": [userId, partnerId],
             "status": "active",
-            "answers": [userId: ["own": own, "guess": guess]],
+            "answers": [userId: ["own": own]],
             "createdAt": Timestamp(date: Date())
         ])
     }
 
-    /// Submit my own preference and my guess about my partner's.
-    /// The Cloud Function resolves the winner once both have answered.
-    func answerQuiz(_ challenge: Challenge, own: String, guess: String) async throws {
+    /// Submit my own answer. The Cloud Function resolves the quiz
+    /// (match or no match) once both partners have answered.
+    func answerQuiz(_ challenge: Challenge, own: String) async throws {
         try await fs.challengesCollection.document(challenge.id).updateData([
-            "answers.\(userId)": ["own": own, "guess": guess]
+            "answers.\(userId)": ["own": own]
         ])
     }
 

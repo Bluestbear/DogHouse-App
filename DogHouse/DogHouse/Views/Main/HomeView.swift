@@ -17,6 +17,7 @@ import Combine
 import FirebaseFirestore
 import WidgetKit
 import PhotosUI
+import OSLog
 
 /// Which game sheet is presented from the Home "+" menu.
 enum GameSheet: Identifiable {
@@ -34,7 +35,8 @@ struct HomeView: View {
     @State private var activeGameSheet: GameSheet?
     @State private var photoPick: PhotosPickerItem?
     @State private var isSubmittingPhoto = false
-    @State private var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var timer = Timer.publish(every: 1, on: .main, in: .common)
+    @State private var timerConnection: (any Cancellable)?
     @State private var currentDate = Date()
     @State private var showLevelUpToast = false
     @State private var lastSeenLevel: RoomLevel = .bareBones
@@ -47,6 +49,10 @@ struct HomeView: View {
     @State private var scenePageIndex = 0
     @State private var showBellyRubToast = false
     @State private var bellyRubSenderName = ""
+    @State private var showRosesToast = false
+    @State private var rosesSenderName = ""
+    @State private var isSendingRoses = false
+    @State private var showCameraPicker = false
     @State private var isAwardingTreats = false
 
     private let shopService = ShopService()
@@ -100,6 +106,43 @@ struct HomeView: View {
         RoomLevel.level(for: partnerTimeSinceRelease)
     }
 
+    /// Rose bouquets stay next to the dog for 5 hours after sending.
+    /// currentDate ticks every second, so these flip off automatically.
+    private static let rosesDisplayWindow: TimeInterval = 5 * 3600
+
+    /// Whether anything on screen is actually counting.
+    ///
+    /// The 1 Hz tick invalidates this whole view, so it must not run when
+    /// there is no elapsed-time label, immunity countdown, or rose bouquet
+    /// to update — otherwise the Home tab re-renders once a second for the
+    /// entire session, including while the user is on another tab.
+    private var needsSecondTicks: Bool {
+        if doghouseService.iAmInDoghouse || doghouseService.partnerIsInDoghouse { return true }
+        if doghouseService.myRosesSentAt != nil || doghouseService.partnerRosesSentAt != nil { return true }
+        if let immunityEnd = authService.userProfile?.immunityUntil, immunityEnd > currentDate { return true }
+        return false
+    }
+
+    private func syncTimer() {
+        if needsSecondTicks, timerConnection == nil {
+            currentDate = Date()
+            timerConnection = timer.connect()
+        } else if !needsSecondTicks, timerConnection != nil {
+            timerConnection?.cancel()
+            timerConnection = nil
+        }
+    }
+
+    private var myRosesActive: Bool {
+        guard let sentAt = doghouseService.myRosesSentAt else { return false }
+        return currentDate.timeIntervalSince(sentAt) < Self.rosesDisplayWindow
+    }
+
+    private var partnerRosesActive: Bool {
+        guard let sentAt = doghouseService.partnerRosesSentAt else { return false }
+        return currentDate.timeIntervalSince(sentAt) < Self.rosesDisplayWindow
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -118,6 +161,12 @@ struct HomeView: View {
                     // App-triggered photo dash — first to send a pic wins
                     if let dash = challengeService.activePhotoDash {
                         photoDashBanner(dash)
+                    }
+
+                    // Result of the most recent photo dash (last 24h) —
+                    // shows the winning photo to both partners
+                    if let result = recentPhotoDashResult {
+                        photoDashResultCard(result)
                     }
 
                     // ==========================================
@@ -182,17 +231,35 @@ struct HomeView: View {
                     MyCardsSheet(challengeService: challengeService, cardCount: myWishCards, partnerName: partnerName)
                 }
             }
+            // The 1 Hz tick only refreshes elapsed-time labels, and runs only
+            // while one is on screen.
             .onReceive(timer) { date in
                 currentDate = date
-                checkForLevelUp()
-                maybeAwardTreats()
             }
+            // Level-ups are hours apart and treats accrue per whole hour, so
+            // these poll once a minute instead of 60× more often than needed.
+            .task {
+                while !Task.isCancelled {
+                    syncTimer()
+                    currentDate = Date()
+                    checkForLevelUp()
+                    maybeAwardTreats()
+                    try? await Task.sleep(for: .seconds(60))
+                }
+            }
+            .onChange(of: doghouseService.myDoghouseEvent?.id) { _, _ in syncTimer() }
+            .onChange(of: doghouseService.partnerDoghouseEvent?.id) { _, _ in syncTimer() }
+            .onChange(of: doghouseService.myRosesSentAt) { _, _ in syncTimer() }
             .animation(.spring(duration: 0.5), value: doghouseService.myDoghouseEvent?.id)
             .animation(.spring(duration: 0.5), value: doghouseService.partnerDoghouseEvent?.id)
             .overlay(alignment: .top) {
                 VStack(spacing: 8) {
                     if showBellyRubToast {
                         bellyRubReceivedToast
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    if showRosesToast {
+                        rosesReceivedToast
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                     if showLevelUpToast {
@@ -212,6 +279,17 @@ struct HomeView: View {
                     try? await Task.sleep(for: .seconds(3))
                     withAnimation { showBellyRubToast = false }
                     doghouseService.receivedBellyRub = nil
+                }
+            }
+            .onChange(of: doghouseService.receivedRoses) { _, senderName in
+                guard let senderName else { return }
+                rosesSenderName = senderName
+                HapticService.shared.success()
+                withAnimation(.spring(duration: 0.4)) { showRosesToast = true }
+                Task {
+                    try? await Task.sleep(for: .seconds(4))
+                    withAnimation { showRosesToast = false }
+                    doghouseService.receivedRoses = nil
                 }
             }
             .task { writeWidgetState() }
@@ -244,13 +322,13 @@ struct HomeView: View {
         }
         .overlay {
             if showSendAnimation {
-                SendToDogHouseAnimation {
+                SendToDogHouseAnimation(partnerName: partnerName) {
                     showSendAnimation = false
                 }
                 .zIndex(100)
             }
             if showReleaseAnimation {
-                ReleaseFromDogHouseAnimation {
+                ReleaseFromDogHouseAnimation(partnerName: partnerName) {
                     showReleaseAnimation = false
                 }
                 .zIndex(100)
@@ -336,8 +414,19 @@ struct HomeView: View {
             if isSubmittingPhoto {
                 ProgressView()
             } else {
+                // Snap with the camera — the true "dash" experience
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button {
+                        showCameraPicker = true
+                    } label: {
+                        Image(systemName: "camera.fill").font(.caption.bold())
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.cozyOrange)
+                }
+                // Or pick from the library
                 PhotosPicker(selection: $photoPick, matching: .images) {
-                    Label("Send", systemImage: "paperplane.fill").font(.caption.bold())
+                    Image(systemName: "photo.on.rectangle").font(.caption.bold())
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color.cozyOrange)
@@ -347,23 +436,85 @@ struct HomeView: View {
         .background(Color.cozyOrange.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .padding(.horizontal, 20)
+        .fullScreenCover(isPresented: $showCameraPicker) {
+            CameraPicker { image in
+                submitDashPhoto(image)
+            }
+            .ignoresSafeArea()
+        }
         .onChange(of: photoPick) { _, item in
-            guard let item, let dash = challengeService.activePhotoDash else { return }
+            guard let item else { return }
             isSubmittingPhoto = true
             Task {
-                defer { isSubmittingPhoto = false; photoPick = nil }
+                defer { photoPick = nil }
                 do {
                     guard let data = try await item.loadTransferable(type: Data.self),
                           let image = UIImage(data: data) else {
+                        isSubmittingPhoto = false
                         errorMessage = "Couldn't load that photo"; return
                     }
-                    try await challengeService.submitPhoto(dash, image: image)
-                    HapticService.shared.success()
+                    submitDashPhoto(image)
                 } catch {
+                    isSubmittingPhoto = false
                     errorMessage = error.localizedDescription
                 }
             }
         }
+    }
+
+    private func submitDashPhoto(_ image: UIImage) {
+        guard let dash = challengeService.activePhotoDash else { return }
+        isSubmittingPhoto = true
+        Task {
+            defer { isSubmittingPhoto = false }
+            do {
+                try await challengeService.submitPhoto(dash, image: image)
+                HapticService.shared.success()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - Photo Dash Result (winning photo, shown for 24h)
+
+    private var recentPhotoDashResult: Challenge? {
+        challengeService.challenges.first {
+            $0.type == "photo" && $0.status == "completed"
+                && $0.photoData != nil
+                && ($0.completedAt.map { Date().timeIntervalSince($0) < 86_400 } ?? false)
+        }
+    }
+
+    @ViewBuilder
+    private func photoDashResultCard(_ dash: Challenge) -> some View {
+        let iWon = dash.winnerId == doghouseService.userId
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("📸").font(.title3)
+                Text(iWon ? "You won the Photo Dash! 🎉"
+                          : "\(partnerName) won the Photo Dash")
+                    .font(.dhBodyBold)
+                Spacer()
+            }
+            if let base64 = dash.photoData,
+               let data = Data(base64Encoded: base64),
+               let image = UIImage(data: data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            Text(dash.prompt)
+                .font(.dhCaption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(Color.freedomGreen.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 20)
     }
 
     // MARK: - My Status Section (TOP)
@@ -420,16 +571,20 @@ struct HomeView: View {
                 partnerName: authService.userProfile?.displayName ?? "You",
                 duration: currentDate.timeIntervalSince(myEvent.startedAt),
                 avatarId: myAvatarId,
-                cosmetics: myCosmetics
+                cosmetics: myCosmetics,
+                showRoses: myRosesActive
             )
+            .accessibilityHidden(true)
         } else {
             LivingRoomScene(
                 partnerName: authService.userProfile?.displayName ?? "You",
                 isCurrentUser: true,
                 level: currentRoomLevel,
                 avatarId: myAvatarId,
-                cosmetics: myCosmetics
+                cosmetics: myCosmetics,
+                showRoses: myRosesActive
             )
+            .accessibilityHidden(true)
         }
     }
 
@@ -437,24 +592,76 @@ struct HomeView: View {
 
     @ViewBuilder
     private var partnerSceneView: some View {
-        if let partnerEvent = doghouseService.partnerDoghouseEvent {
-            DoghouseScene(
-                isCurrentUser: false,
-                partnerName: partnerName,
-                duration: currentDate.timeIntervalSince(partnerEvent.startedAt),
-                avatarId: partnerAvatarId,
-                cosmetics: partnerCosmetics,
-                onBellyRub: handleBellyRubSend
-            )
-        } else {
-            LivingRoomScene(
-                partnerName: partnerName,
-                isCurrentUser: false,
-                level: partnerRoomLevel,
-                avatarId: partnerAvatarId,
-                cosmetics: partnerCosmetics,
-                onBellyRub: handleBellyRubSend
-            )
+        Group {
+            if let partnerEvent = doghouseService.partnerDoghouseEvent {
+                DoghouseScene(
+                    isCurrentUser: false,
+                    partnerName: partnerName,
+                    duration: currentDate.timeIntervalSince(partnerEvent.startedAt),
+                    avatarId: partnerAvatarId,
+                    cosmetics: partnerCosmetics,
+                    onBellyRub: handleBellyRubSend,
+                    showRoses: partnerRosesActive
+                )
+                .accessibilityHidden(true)
+            } else {
+                LivingRoomScene(
+                    partnerName: partnerName,
+                    isCurrentUser: false,
+                    level: partnerRoomLevel,
+                    avatarId: partnerAvatarId,
+                    cosmetics: partnerCosmetics,
+                    onBellyRub: handleBellyRubSend,
+                    showRoses: partnerRosesActive
+                )
+                .accessibilityHidden(true)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            sendRosesButton
+                .padding(.trailing, 32)
+                .padding(.top, 16)
+        }
+    }
+
+    // MARK: - Roses
+
+    private var sendRosesButton: some View {
+        Button {
+            handleRosesSend()
+        } label: {
+            VStack(spacing: 2) {
+                if isSendingRoses {
+                    ProgressView()
+                } else {
+                    Text("🌹").font(.title2)
+                }
+                Text("5 🦴")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .background(.ultraThinMaterial)
+            .clipShape(Circle())
+            .shadow(radius: 3)
+        }
+        .disabled(isSendingRoses)
+        // The label is a bare emoji, which VoiceOver reads as "rose" with no
+        // indication of what the control does or what it costs.
+        .accessibilityLabel("Send roses to \(partnerName)")
+        .accessibilityHint("Costs 5 treats")
+    }
+
+    private func handleRosesSend() {
+        isSendingRoses = true
+        HapticService.shared.success()
+        Task {
+            defer { isSendingRoses = false }
+            do {
+                try await doghouseService.sendRoses()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -679,7 +886,7 @@ struct HomeView: View {
                 }
             }
         } catch {
-            print("Failed to load couple tasks: \(error)")
+            Logger.data.error("Couple task load failed: \(error.localizedDescription, privacy: .public)")
         }
 
         coupleTasksLoaded = true
@@ -927,6 +1134,8 @@ struct HomeView: View {
                         .frame(height: 8)
                 }
             }
+            // The pips encode the count purely through colour.
+            .accessibilityHidden(true)
 
             if myGraceCharges < UserProfile.maxGraceCharges {
                 Text("Recharges 1 per day")
@@ -938,6 +1147,12 @@ struct HomeView: View {
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .padding(.horizontal, 20)
+        // Read as one sentence instead of four disconnected fragments.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Grace: \(myGraceCharges) of \(UserProfile.maxGraceCharges) remaining."
+            + (myGraceCharges < UserProfile.maxGraceCharges ? " Recharges one per day." : "")
+        )
     }
 
     // MARK: - Level Up Detection
@@ -1014,6 +1229,20 @@ struct HomeView: View {
         HStack(spacing: 8) {
             Text("🐾")
             Text("\(bellyRubSenderName) gave you a belly rub!")
+                .font(.dhCaptionBold)
+            Text("❤️")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .shadow(radius: 4)
+    }
+
+    private var rosesReceivedToast: some View {
+        HStack(spacing: 8) {
+            Text("🌹")
+            Text("\(rosesSenderName) sent you roses!")
                 .font(.dhCaptionBold)
             Text("❤️")
         }

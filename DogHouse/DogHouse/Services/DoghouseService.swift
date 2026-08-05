@@ -21,6 +21,7 @@ import SwiftUI
 import Combine
 import FirebaseAuth
 import FirebaseFirestore
+import OSLog
 
 @MainActor
 class DoghouseService: ObservableObject {
@@ -36,15 +37,25 @@ class DoghouseService: ObservableObject {
     /// Display name of the partner who just sent a belly rub; cleared after consumption
     @Published var receivedBellyRub: String?
 
+    /// Display name of the partner who just sent roses; cleared after consumption
+    @Published var receivedRoses: String?
+
+    /// When roses were last sent TO ME — drives the bouquet next to my dog
+    @Published var myRosesSentAt: Date?
+
+    /// When roses were last sent TO MY PARTNER — drives the bouquet next
+    /// to their dog (visible to me, the sender, on their scene page)
+    @Published var partnerRosesSentAt: Date?
+
     private(set) var userId: String
     private(set) var partnerId: String?
     private let fs = FirebaseService.shared
     private var myEventListener: ListenerRegistration?
     private var partnerEventListener: ListenerRegistration?
-    private var historySentListener: ListenerRegistration?
-    private var historyReceivedListener: ListenerRegistration?
     private var bellyRubListener: ListenerRegistration?
     private var bellyRubListenStart: Date?
+    private var rosesListener: ListenerRegistration?
+    private var partnerRosesListener: ListenerRegistration?
     private var historySentEvents: [DoghouseEvent] = []
     private var historyReceivedEvents: [DoghouseEvent] = []
 
@@ -68,12 +79,12 @@ class DoghouseService: ObservableObject {
         }
     }
 
-    deinit {
+    isolated deinit {
         myEventListener?.remove()
         partnerEventListener?.remove()
-        historySentListener?.remove()
-        historyReceivedListener?.remove()
         bellyRubListener?.remove()
+        rosesListener?.remove()
+        partnerRosesListener?.remove()
     }
 
     // MARK: - Partner Resolution
@@ -88,7 +99,7 @@ class DoghouseService: ObservableObject {
                 self.startListening(partnerId: pid)
             }
         } catch {
-            print("Failed to resolve partner: \(error)")
+            Logger.data.error("Partner resolution failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -110,7 +121,10 @@ class DoghouseService: ObservableObject {
                     } else {
                         // Immunity on release is now granted server-side by the
                         // releasePartner callable / vote resolver.
+                        let wasActive = self.myDoghouseEvent != nil
                         self.myDoghouseEvent = nil
+                        // A release just closed an event — pull the new history.
+                        if wasActive { Task { await self.refreshHistory() } }
                     }
                 }
             }
@@ -129,44 +143,19 @@ class DoghouseService: ObservableObject {
                     if let doc = snapshot?.documents.first {
                         self.partnerDoghouseEvent = try? self.fs.decode(DoghouseEvent.self, from: doc)
                     } else {
+                        let wasActive = self.partnerDoghouseEvent != nil
                         self.partnerDoghouseEvent = nil
+                        if wasActive { Task { await self.refreshHistory() } }
                     }
                 }
             }
 
-        // LISTENERS 3 & 4: History — split into sent/received so Firestore rules
-        // can verify access via senderId/receiverId rather than coupleKey.
-        historySentListener = fs.doghouseEventsCollection
-            .whereField("senderId", isEqualTo: userId)
-            .whereField("isActive", isEqualTo: false)
-            .order(by: "startedAt", descending: true)
-            .limit(to: 50)
-            .addSnapshotListener { [weak self] snapshot, error in
-                guard let self else { return }
-                Task { @MainActor [weak self] in
-                    guard let self, let docs = snapshot?.documents else { return }
-                    self.historySentEvents = docs.compactMap {
-                        try? self.fs.decode(DoghouseEvent.self, from: $0)
-                    }
-                    self.mergeHistory()
-                }
-            }
-
-        historyReceivedListener = fs.doghouseEventsCollection
-            .whereField("receiverId", isEqualTo: userId)
-            .whereField("isActive", isEqualTo: false)
-            .order(by: "startedAt", descending: true)
-            .limit(to: 50)
-            .addSnapshotListener { [weak self] snapshot, error in
-                guard let self else { return }
-                Task { @MainActor [weak self] in
-                    guard let self, let docs = snapshot?.documents else { return }
-                    self.historyReceivedEvents = docs.compactMap {
-                        try? self.fs.decode(DoghouseEvent.self, from: $0)
-                    }
-                    self.mergeHistory()
-                }
-            }
+        // History is fetched once, not listened to. Closed events only change
+        // when an active event ends, which listeners 1 and 2 already observe —
+        // holding two more live 50-document queries open for the whole session
+        // was continuous socket traffic and read billing for data that changes
+        // a couple of times a week. See refreshHistory().
+        Task { await refreshHistory() }
 
         // LISTENER 5: Incoming belly rubs — document keyed on my userId
         bellyRubListenStart = Date()
@@ -184,6 +173,65 @@ class DoghouseService: ObservableObject {
                     self.receivedBellyRub = fromName
                 }
             }
+
+        // LISTENER 6: Incoming roses — document keyed on my userId.
+        // The timestamp always feeds the bouquet (shows for 5h); the
+        // toast only fires for roses sent after app open.
+        rosesListener = fs.db.collection("roses").document(userId)
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          let data = snapshot?.data(),
+                          let sentAt = (data["sentAt"] as? Timestamp)?.dateValue()
+                    else { return }
+                    self.myRosesSentAt = sentAt
+                    if let start = self.bellyRubListenStart, sentAt > start,
+                       let fromName = data["fromDisplayName"] as? String {
+                        self.receivedRoses = fromName
+                    }
+                }
+            }
+
+        // LISTENER 7: Roses I sent to my partner — so the bouquet also
+        // shows next to their dog on my screen
+        partnerRosesListener = fs.db.collection("roses").document(partnerId)
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          let data = snapshot?.data(),
+                          let sentAt = (data["sentAt"] as? Timestamp)?.dateValue()
+                    else { return }
+                    self.partnerRosesSentAt = sentAt
+                }
+            }
+    }
+
+    /// Re-read closed events. Called at start-up and whenever an active event
+    /// disappears (a release), which is the only way history can grow.
+    func refreshHistory() async {
+        guard userId != "mock_user" else { return }
+        let base = fs.doghouseEventsCollection.whereField("isActive", isEqualTo: false)
+        do {
+            async let sent = base
+                .whereField("senderId", isEqualTo: userId)
+                .order(by: "startedAt", descending: true).limit(to: 50).getDocuments()
+            async let received = base
+                .whereField("receiverId", isEqualTo: userId)
+                .order(by: "startedAt", descending: true).limit(to: 50).getDocuments()
+
+            let (sentSnap, receivedSnap) = try await (sent, received)
+            historySentEvents = sentSnap.documents.compactMap {
+                try? fs.decode(DoghouseEvent.self, from: $0)
+            }
+            historyReceivedEvents = receivedSnap.documents.compactMap {
+                try? fs.decode(DoghouseEvent.self, from: $0)
+            }
+            mergeHistory()
+        } catch {
+            Logger.data.error("History refresh failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func mergeHistory() {
@@ -277,5 +325,14 @@ class DoghouseService: ObservableObject {
             "fromDisplayName": fromDisplayName,
             "sentAt": Timestamp(date: Date())
         ])
+    }
+
+    // MARK: - Roses
+
+    /// Send roses to the partner. Costs treats, so it runs through the
+    /// sendRoses callable (server deducts and writes roses/{partnerId}).
+    func sendRoses() async throws {
+        guard let partnerId, partnerId != "skipped" else { return }
+        try await CloudFunctions.shared.call("sendRoses")
     }
 }

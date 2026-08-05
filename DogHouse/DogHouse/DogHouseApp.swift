@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import GoogleSignIn
 
 @main
 struct DogHouseApp: App {
@@ -14,6 +15,13 @@ struct DogHouseApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(authService)
+                // Google Sign-In hands control back through a custom URL. This
+                // belongs on the scene, not on AppDelegate: a SwiftUI app runs
+                // under the UIScene lifecycle, where the app delegate's
+                // application(_:open:options:) is never called.
+                .onOpenURL { url in
+                    _ = GIDSignIn.sharedInstance.handle(url)
+                }
         }
     }
 }

@@ -10,7 +10,16 @@ import SwiftUI
 // MARK: - Send to DogHouse Animation
 
 struct SendToDogHouseAnimation: View {
+    /// Name of the partner being sent. These overlays are shown to the
+    /// SENDER, so the text speaks about the partner — not "you".
+    var partnerName: String = ""
     var onComplete: () -> Void
+
+    private var headline: String {
+        partnerName.isEmpty
+            ? "SENT TO THE\nDOGHOUSE!"
+            : "\(partnerName.uppercased()) WAS SENT\nTO THE DOGHOUSE!"
+    }
 
     @State private var shakeOffset: CGFloat = 0
     @State private var showFlash = false
@@ -64,17 +73,19 @@ struct SendToDogHouseAnimation: View {
 
                 Spacer()
 
-                // "SENT TO THE DOGHOUSE!" text
+                // "[NAME] WAS SENT TO THE DOGHOUSE!" text
                 if showText {
                     VStack(spacing: 8) {
                         Image(systemName: "house.fill")
                             .font(.system(size: 40))
                             .foregroundStyle(.red)
 
-                        Text("SENT TO THE\nDOGHOUSE!")
-                            .font(.system(size: 32, weight: .black, design: .rounded))
+                        Text(headline)
+                            .font(.dhDisplay)
                             .multilineTextAlignment(.center)
+                            .minimumScaleFactor(0.5)
                             .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
                     }
                     .scaleEffect(textScale)
                     .transition(.scale.combined(with: .opacity))
@@ -172,7 +183,18 @@ struct SendToDogHouseAnimation: View {
 // MARK: - Release from DogHouse Animation
 
 struct ReleaseFromDogHouseAnimation: View {
+    /// Name of the partner being released. Shown to the SENDER when they
+    /// let their partner out, so the text speaks about the partner.
+    var partnerName: String = ""
     var onComplete: () -> Void
+
+    private var headline: String {
+        partnerName.isEmpty ? "YOU'RE FREE!" : "\(partnerName.uppercased()) IS FREE!"
+    }
+
+    private var subline: String {
+        partnerName.isEmpty ? "Welcome home!" : "You let them out — welcome home, \(partnerName)!"
+    }
 
     @State private var doorBurst = false
     @State private var showSunburst = false
@@ -249,16 +271,21 @@ struct ReleaseFromDogHouseAnimation: View {
                     }
                 }
 
-                // "YOU'RE FREE!" text
+                // "[NAME] IS FREE!" text
                 if showText {
                     VStack(spacing: 8) {
-                        Text("YOU'RE FREE!")
-                            .font(.system(size: 36, weight: .black, design: .rounded))
+                        Text(headline)
+                            .font(.dhDisplay)
+                            .multilineTextAlignment(.center)
+                            .minimumScaleFactor(0.5)
                             .foregroundStyle(Color.freedomGreen)
+                            .padding(.horizontal, 16)
 
-                        Text("Welcome home!")
-                            .font(.system(size: 20, weight: .semibold, design: .rounded))
+                        Text(subline)
+                            .font(.dhSubtitle)
+                            .multilineTextAlignment(.center)
                             .foregroundStyle(.white.opacity(0.8))
+                            .padding(.horizontal, 24)
                     }
                     .scaleEffect(textScale)
                     .transition(.scale.combined(with: .opacity))
@@ -396,12 +423,10 @@ struct ConfettiParticle: Identifiable {
 
 #Preview("Send Animation") {
     SendToDogHouseAnimation {
-        print("Send animation complete")
     }
 }
 
 #Preview("Release Animation") {
     ReleaseFromDogHouseAnimation {
-        print("Release animation complete")
     }
 }

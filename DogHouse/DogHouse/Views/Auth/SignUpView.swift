@@ -25,7 +25,7 @@ struct SignUpView: View {
                         .font(.system(size: 50))
                         .foregroundStyle(Color.dogHouseBrown)
                     Text("Create Account")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .font(.dhScreenTitle)
                 }
                 .padding(.top, 20)
 
@@ -81,6 +81,9 @@ struct SignUpView: View {
                         .foregroundStyle(.red)
                         .padding(.horizontal, 24)
                 }
+
+                SocialSignInButtons(onLightBackground: true)
+                    .padding(.horizontal, 24)
             }
         }
         .navigationTitle("Sign Up")

@@ -23,7 +23,7 @@ struct LoginView: View {
                         .font(.system(size: 50))
                         .foregroundStyle(Color.dogHouseBrown)
                     Text("Welcome Back")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .font(.dhScreenTitle)
                 }
                 .padding(.top, 20)
 
@@ -70,6 +70,9 @@ struct LoginView: View {
                         .foregroundStyle(.red)
                         .padding(.horizontal, 24)
                 }
+
+                SocialSignInButtons(onLightBackground: true)
+                    .padding(.horizontal, 24)
             }
         }
         .navigationTitle("Log In")

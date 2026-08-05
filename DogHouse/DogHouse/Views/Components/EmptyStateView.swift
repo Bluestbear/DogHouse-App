@@ -54,6 +54,5 @@ struct EmptyStateView: View {
         subtitle: "Share your code to connect with friends!",
         actionTitle: "Copy Code"
     ) {
-        print("Copy code tapped")
     }
 }
