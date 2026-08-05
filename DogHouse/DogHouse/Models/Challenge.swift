@@ -31,7 +31,6 @@ struct Challenge: Codable, Identifiable {
     var cardAwarded: Bool? = nil
 
     var isActive: Bool { status == "active" }
-    var isTie: Bool { status == "completed" && winnerId == nil }
 
     func hasAnswered(_ userId: String) -> Bool {
         answers?[userId] != nil
@@ -76,21 +75,5 @@ struct QuizQuestion {
 
     static func random() -> QuizQuestion {
         bank.randomElement()!
-    }
-}
-
-// MARK: - Photo Dash Prompts
-
-enum PhotoDashPrompt {
-    static let all = [
-        "First to send a selfie wins! 🤳",
-        "First to send a pic of what they're doing right now 📸",
-        "First to send a photo of something that reminds them of us ❤️",
-        "First to send their best silly face 🤪",
-        "First to send a pic of the view from where they are 🪟",
-    ]
-
-    static func random() -> String {
-        all.randomElement()!
     }
 }

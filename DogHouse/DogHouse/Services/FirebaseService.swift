@@ -33,7 +33,6 @@ final class FirebaseService {
     var usersCollection: CollectionReference { db.collection("users") }
     var partnerCodesCollection: CollectionReference { db.collection("partnerCodes") }
     var doghouseEventsCollection: CollectionReference { db.collection("doghouseEvents") }
-    var friendshipsCollection: CollectionReference { db.collection("friendships") }
     var voteEventsCollection: CollectionReference { db.collection("voteEvents") }
     var onboardingTasksCollection: CollectionReference { db.collection("onboardingTasks") }
     var coupleTasksCollection: CollectionReference { db.collection("coupleTasks") }
@@ -49,10 +48,6 @@ final class FirebaseService {
     /// (pairing code, push token). See the /users/{uid}/private rules.
     func privateDataDocument(for userId: String) -> DocumentReference {
         usersCollection.document(userId).collection("private").document("data")
-    }
-
-    func generateDocumentID() -> String {
-        db.collection("_temp").document().documentID
     }
 
     /// Build a coupleKey from two user IDs (sorted, underscore-joined)

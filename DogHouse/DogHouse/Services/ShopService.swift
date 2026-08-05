@@ -54,17 +54,7 @@ class ShopService {
 
     /// Claim treats for time spent at home. The server computes the amount
     /// from event history; the client only passes the level-based rate.
-    func awardHomeTreats(lastAward: Date?, treatsPerHour: Int) async throws {
+    func awardHomeTreats(treatsPerHour: Int) async throws {
         try await cf.call("claimHomeTreats", ["treatsPerHour": treatsPerHour])
-    }
-}
-
-// MARK: - Errors
-
-enum ShopError: LocalizedError {
-    case insufficientTreats
-
-    var errorDescription: String? {
-        "Not enough treats! Keep playing to earn more 🦴"
     }
 }

@@ -130,10 +130,6 @@ struct OnboardingTasksDocument: Codable, Identifiable {
         mySlot(userId: userId) == .user1 ? user2Submitted : user1Submitted
     }
 
-    func myStrikes(userId: String) -> [TaskStrike] {
-        mySlot(userId: userId) == .user1 ? user1Strikes : user2Strikes
-    }
-
     func myReviewComplete(userId: String) -> Bool {
         mySlot(userId: userId) == .user1 ? user1ReviewComplete : user2ReviewComplete
     }

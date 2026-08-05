@@ -58,24 +58,6 @@ final class SoundService: ObservableObject {
         playToneSequence(frequencies: [1200, 1400, 1600], durations: [0.06, 0.06, 0.12], volume: 0.25)
     }
 
-    func playVoteResult() {
-        guard isEnabled else { return }
-        // Notification chime
-        playToneSequence(frequencies: [660, 880, 660], durations: [0.1, 0.15, 0.1], volume: 0.3)
-    }
-
-    func playButtonTap() {
-        guard isEnabled else { return }
-        // Subtle click
-        playToneSequence(frequencies: [800], durations: [0.03], volume: 0.15)
-    }
-
-    func playImmunityGranted() {
-        guard isEnabled else { return }
-        // Shield activation sound — rising shimmer
-        playToneSequence(frequencies: [440, 660, 880, 1100], durations: [0.08, 0.08, 0.1, 0.15], volume: 0.3)
-    }
-
     // MARK: - Tone Synthesis
 
     private func playToneSequence(frequencies: [Double], durations: [Double], volume: Float) {

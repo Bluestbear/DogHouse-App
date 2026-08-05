@@ -68,10 +68,6 @@ class VoteService: ObservableObject {
     // runs every minute): it tallies, releases the winner from the doghouse,
     // and notifies everyone. Clients only cast votes.
 
-    func activeVoteEvent(forGroupId groupId: String) -> VoteEvent? {
-        activeVoteEvents.first { $0.groupId == groupId }
-    }
-
     func hasVoted(in voteEventId: String) -> Bool {
         guard let event = activeVoteEvents.first(where: { $0.id == voteEventId }) else {
             return false

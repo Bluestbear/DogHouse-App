@@ -273,16 +273,6 @@ class DoghouseService: ObservableObject {
         ])
     }
 
-    // MARK: - Grace Charge Helpers
-
-    /// Compute effective grace charges accounting for time-based recharge (1 per 24h)
-    static func computeEffectiveCharges(stored: Int, lastRecharge: Date?) -> Int {
-        guard let lastRecharge else { return stored }
-        let hoursSinceRecharge = Date().timeIntervalSince(lastRecharge) / 3600
-        let rechargedCharges = Int(hoursSinceRecharge / 24)
-        return min(stored + rechargedCharges, UserProfile.maxGraceCharges)
-    }
-
     // MARK: - Computed Helpers
 
     /// When a user's current stay at home began: the moment they were last

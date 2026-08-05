@@ -690,31 +690,29 @@ struct HomeView: View {
         }
     }
 
-    // Awards treats per complete hour at home, scaled by room level (1-5/hr).
+    /// Claims treats for whole hours spent at home, scaled by room level
+    /// (1-5/hr). The server computes the actual amount from event history and
+    /// is the authority — this only avoids calling it more than once an hour.
     private func maybeAwardTreats() {
-        guard !isAwardingTreats,
-              doghouseService.myDoghouseEvent == nil,
-              let lastAward = authService.userProfile?.lastTreatAward else {
-            // If lastTreatAward is nil the user has never been awarded — kick off on first hour.
-            if !isAwardingTreats,
-               doghouseService.myDoghouseEvent == nil,
-               authService.userProfile?.lastTreatAward == nil,
-               timeSinceMyRelease >= 3600 {
-                isAwardingTreats = true
-                Task {
-                    try? await shopService.awardHomeTreats(lastAward: nil, treatsPerHour: currentRoomLevel.treatsPerHour)
-                    isAwardingTreats = false
-                }
-            }
-            return
+        guard !isAwardingTreats, doghouseService.myDoghouseEvent == nil else { return }
+
+        let due: Bool
+        if let lastAward = authService.userProfile?.lastTreatAward {
+            due = Date().timeIntervalSince(lastAward) >= Self.treatAwardInterval
+        } else {
+            // Never claimed — wait for the first full hour at home to accrue.
+            due = timeSinceMyRelease >= Self.treatAwardInterval
         }
-        guard Date().timeIntervalSince(lastAward) >= 3600 else { return }
+        guard due else { return }
+
         isAwardingTreats = true
         Task {
-            try? await shopService.awardHomeTreats(lastAward: lastAward, treatsPerHour: currentRoomLevel.treatsPerHour)
+            try? await shopService.awardHomeTreats(treatsPerHour: currentRoomLevel.treatsPerHour)
             isAwardingTreats = false
         }
     }
+
+    private static let treatAwardInterval: TimeInterval = 3600
 
     private func writeWidgetState() {
         let defaults = UserDefaults(suiteName: "group.com.harrisonkrampe.doghouse")
