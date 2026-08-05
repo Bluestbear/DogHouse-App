@@ -10,10 +10,8 @@ import SwiftUI
 /// The tick is deliberately confined to this view. Driving a seconds counter
 /// from a `@State` date on the enclosing screen invalidates that screen's
 /// entire body once a second — on Home that meant re-evaluating both room
-/// scenes and every card sixty times a minute, including while the user was
-/// looking at another tab. `TimelineView` only schedules updates for its own
-/// subtree, and SwiftUI stops scheduling it altogether while the view is off
-/// screen or the app is in the background.
+/// scenes and every card sixty times a minute. `TimelineView` re-renders only
+/// its own subtree, and stops entirely while the app is backgrounded.
 struct ElapsedTimeText: View {
     /// The moment being counted from.
     let start: Date

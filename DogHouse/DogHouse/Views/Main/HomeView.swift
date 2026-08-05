@@ -38,7 +38,8 @@ struct HomeView: View {
     /// Seconds counters do not use this — see `ElapsedTimeText`.
     @State private var currentDate = Date()
     @State private var showLevelUpToast = false
-    @State private var lastSeenLevel: RoomLevel = .bareBones
+    /// nil until the first level reading of the session — see checkForLevelUp.
+    @State private var lastSeenLevel: RoomLevel?
     @State private var showSendAnimation = false
     @State private var showReleaseAnimation = false
     @State private var errorMessage: String?
@@ -676,16 +677,27 @@ struct HomeView: View {
         guard doghouseService.myDoghouseEvent == nil else { return }
 
         let newLevel = currentRoomLevel
-        if newLevel.rawValue > lastSeenLevel.rawValue {
+
+        // First reading of the session establishes where the user already is.
+        // Seeding this to level 1 instead meant every launch looked like a
+        // level-up from the bottom of the ladder, so a user who had been home
+        // for a month was congratulated on reaching "VIP Lounge" every time
+        // they opened the app.
+        guard let previous = lastSeenLevel else {
             lastSeenLevel = newLevel
-            withAnimation(.spring(duration: 0.4)) {
-                showLevelUpToast = true
-            }
-            Task {
-                try? await Task.sleep(for: .seconds(3))
-                withAnimation {
-                    showLevelUpToast = false
-                }
+            return
+        }
+
+        guard newLevel.rawValue > previous.rawValue else { return }
+
+        lastSeenLevel = newLevel
+        withAnimation(.spring(duration: 0.4)) {
+            showLevelUpToast = true
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            withAnimation {
+                showLevelUpToast = false
             }
         }
     }
