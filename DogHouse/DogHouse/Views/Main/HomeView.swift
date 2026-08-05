@@ -146,13 +146,15 @@ struct HomeView: View {
                 VStack(spacing: 20) {
                     // Notifications disabled — the app can't work without them
                     if notificationService.authStatus == .denied {
-                        notificationsDeniedBanner
+                        NotificationsDeniedBanner {
+                            notificationService.openSystemSettings()
+                        }
                     }
 
                     // Anniversary race — only on the day, until someone wins
                     if challengeService.isAnniversaryToday,
                        challengeService.anniversaryRaceResult == nil {
-                        anniversaryRaceBanner
+                        AnniversaryRaceBanner(onTap: wishHappyAnniversary)
                     }
 
                     // App-triggered photo dash — first to send a pic wins
@@ -163,7 +165,11 @@ struct HomeView: View {
                     // Result of the most recent photo dash (last 24h) —
                     // shows the winning photo to both partners
                     if let result = recentPhotoDashResult {
-                        photoDashResultCard(result)
+                        PhotoDashResultCard(
+                            dash: result,
+                            iWon: result.winnerId == doghouseService.userId,
+                            partnerName: partnerName
+                        )
                     }
 
                     // ==========================================
@@ -334,69 +340,15 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Notifications Denied Banner
-
-    private var notificationsDeniedBanner: some View {
-        Button {
-            notificationService.openSystemSettings()
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "bell.slash.fill")
-                    .font(.title3)
-                    .foregroundStyle(.white)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Notifications are off")
-                        .font(.dhBodyBold)
-                        .foregroundStyle(.white)
-                    Text("DogHouse can't work without them — tap to enable in Settings")
-                        .font(.dhCaption)
-                        .foregroundStyle(.white.opacity(0.9))
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.bold())
-                    .foregroundStyle(.white.opacity(0.8))
+    private func wishHappyAnniversary() {
+        Task {
+            do {
+                try await challengeService.wishHappyAnniversary()
+                HapticService.shared.success()
+            } catch {
+                errorMessage = error.localizedDescription
             }
-            .padding(14)
-            .background(Color.red.gradient)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
         }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 20)
-        .accessibilityLabel("Notifications are disabled. Tap to open Settings and enable them.")
-    }
-
-    // MARK: - Anniversary Race Banner
-
-    private var anniversaryRaceBanner: some View {
-        Button {
-            Task {
-                do {
-                    try await challengeService.wishHappyAnniversary()
-                    HapticService.shared.success()
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
-            }
-        } label: {
-            VStack(spacing: 4) {
-                Text("💍 IT'S YOUR ANNIVERSARY! 💍")
-                    .font(.headline)
-                Text("Tap FIRST to wish it & win a Whatever-I-Want card!")
-                    .font(.caption)
-                    .opacity(0.95)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(
-                LinearGradient(colors: [Color.cozyOrange, Color(red: 0.9, green: 0.35, blue: 0.45)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-            )
-            .foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 20)
     }
 
     // MARK: - Photo Dash Banner
@@ -482,37 +434,6 @@ struct HomeView: View {
                 && $0.photoData != nil
                 && ($0.completedAt.map { Date().timeIntervalSince($0) < 86_400 } ?? false)
         }
-    }
-
-    @ViewBuilder
-    private func photoDashResultCard(_ dash: Challenge) -> some View {
-        let iWon = dash.winnerId == doghouseService.userId
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("📸").font(.title3)
-                Text(iWon ? "You won the Photo Dash! 🎉"
-                          : "\(partnerName) won the Photo Dash")
-                    .font(.dhBodyBold)
-                Spacer()
-            }
-            if let base64 = dash.photoData,
-               let data = Data(base64Encoded: base64),
-               let image = UIImage(data: data) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 180)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            Text(dash.prompt)
-                .font(.dhCaption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(14)
-        .background(Color.freedomGreen.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 20)
     }
 
     // MARK: - My Status Section (TOP)
@@ -1060,7 +981,7 @@ struct HomeView: View {
         }
 
         // Grace meter
-        graceMeterView
+        GraceMeterView(charges: myGraceCharges)
 
         // Immunity banner
         if let partner = authService.partnerProfile, partner.hasImmunity,
@@ -1109,50 +1030,6 @@ struct HomeView: View {
 
     private var sendDisabled: Bool {
         partnerHasImmunity || myGraceCharges <= 0
-    }
-
-    // MARK: - Grace Meter
-
-    private var graceMeterView: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Image(systemName: "heart.circle.fill")
-                    .foregroundStyle(myGraceCharges > 0 ? Color.cozyOrange : .red)
-                Text("Grace")
-                    .font(.dhCaptionBold)
-                Spacer()
-                Text("\(myGraceCharges) / \(UserProfile.maxGraceCharges)")
-                    .font(.dhCaptionBold)
-                    .foregroundStyle(myGraceCharges > 0 ? Color.primary : Color.red)
-            }
-
-            // Charge pips
-            HStack(spacing: 6) {
-                ForEach(0..<UserProfile.maxGraceCharges, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(index < myGraceCharges ? Color.cozyOrange : Color(.systemGray4))
-                        .frame(height: 8)
-                }
-            }
-            // The pips encode the count purely through colour.
-            .accessibilityHidden(true)
-
-            if myGraceCharges < UserProfile.maxGraceCharges {
-                Text("Recharges 1 per day")
-                    .font(.dhCaption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(12)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 20)
-        // Read as one sentence instead of four disconnected fragments.
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "Grace: \(myGraceCharges) of \(UserProfile.maxGraceCharges) remaining."
-            + (myGraceCharges < UserProfile.maxGraceCharges ? " Recharges one per day." : "")
-        )
     }
 
     // MARK: - Level Up Detection
@@ -1212,45 +1089,30 @@ struct HomeView: View {
     }
 
     private var levelUpToast: some View {
-        HStack(spacing: 8) {
+        HomeToast {
             Image(systemName: "star.fill")
                 .foregroundStyle(.yellow)
             Text("\(currentRoomLevel.unlockMessage)")
                 .font(.dhCaptionBold)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
-        .clipShape(Capsule())
-        .shadow(radius: 4)
     }
 
     private var bellyRubReceivedToast: some View {
-        HStack(spacing: 8) {
+        HomeToast {
             Text("🐾")
             Text("\(bellyRubSenderName) gave you a belly rub!")
                 .font(.dhCaptionBold)
             Text("❤️")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
-        .clipShape(Capsule())
-        .shadow(radius: 4)
     }
 
     private var rosesReceivedToast: some View {
-        HStack(spacing: 8) {
+        HomeToast {
             Text("🌹")
             Text("\(rosesSenderName) sent you roses!")
                 .font(.dhCaptionBold)
             Text("❤️")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
-        .clipShape(Capsule())
-        .shadow(radius: 4)
     }
 }
 
