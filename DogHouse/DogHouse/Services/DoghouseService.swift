@@ -285,24 +285,44 @@ class DoghouseService: ObservableObject {
 
     // MARK: - Computed Helpers
 
+    /// When a user's current stay at home began: the moment they were last
+    /// released from the doghouse, or — for someone who has never been in one —
+    /// the day they created their account.
+    ///
+    /// The account-creation fallback is what makes the "You've been home for"
+    /// counter move for a brand new user. It used to return a flat one hour,
+    /// so every user who had never been doghoused saw a timer permanently
+    /// reading "1h 0m 0s" and a room level frozen at 2.
+    nonisolated static func homeStartDate(
+        history: [DoghouseEvent],
+        receiverId: String,
+        accountCreatedAt: Date?
+    ) -> Date? {
+        let released = history
+            .filter { $0.receiverId == receiverId }
+            .compactMap(\.endedAt)
+            .max()
+        return released ?? accountCreatedAt
+    }
+
     /// Time since I was last released from the doghouse (for my room progression)
-    func timeSinceMyLastRelease() -> TimeInterval {
-        // Find the most recent event where I was the receiver
-        let myHistory = doghouseHistory.filter { $0.receiverId == userId }
-        if let lastEvent = myHistory.first, let endedAt = lastEvent.endedAt {
-            return Date().timeIntervalSince(endedAt)
-        }
-        return 3600 // Default when no history exists
+    func timeSinceMyLastRelease(accountCreatedAt: Date?, now: Date = Date()) -> TimeInterval {
+        guard let start = Self.homeStartDate(
+            history: doghouseHistory,
+            receiverId: userId,
+            accountCreatedAt: accountCreatedAt
+        ) else { return 0 }
+        return max(0, now.timeIntervalSince(start))
     }
 
     /// Time since partner was last released from the doghouse (for partner's room progression)
-    func timeSincePartnerLastRelease() -> TimeInterval {
-        guard let partnerId else { return 3600 }
-        let partnerHistory = doghouseHistory.filter { $0.receiverId == partnerId }
-        if let lastEvent = partnerHistory.first, let endedAt = lastEvent.endedAt {
-            return Date().timeIntervalSince(endedAt)
-        }
-        return 3600
+    func timeSincePartnerLastRelease(accountCreatedAt: Date?, now: Date = Date()) -> TimeInterval {
+        guard let partnerId, let start = Self.homeStartDate(
+            history: doghouseHistory,
+            receiverId: partnerId,
+            accountCreatedAt: accountCreatedAt
+        ) else { return 0 }
+        return max(0, now.timeIntervalSince(start))
     }
 
     /// Whether I am currently in the doghouse

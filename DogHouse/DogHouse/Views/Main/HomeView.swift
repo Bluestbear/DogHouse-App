@@ -54,6 +54,7 @@ struct HomeView: View {
     @State private var isSendingRoses = false
     @State private var showCameraPicker = false
     @State private var isAwardingTreats = false
+    @Environment(\.scenePhase) private var scenePhase
 
     private let shopService = ShopService()
 
@@ -77,9 +78,14 @@ struct HomeView: View {
         authService.partnerProfile?.cosmetics ?? .none
     }
 
-    /// Time since I was last released (drives my room progression)
+    /// Time since I was last released (drives my room progression).
+    /// Derived from `currentDate` so it advances with the tick rather than
+    /// reading the clock independently of what triggered the redraw.
     private var timeSinceMyRelease: TimeInterval {
-        doghouseService.timeSinceMyLastRelease()
+        doghouseService.timeSinceMyLastRelease(
+            accountCreatedAt: authService.userProfile?.createdAt,
+            now: currentDate
+        )
     }
 
     private var currentRoomLevel: RoomLevel {
@@ -99,7 +105,10 @@ struct HomeView: View {
     }
 
     private var partnerTimeSinceRelease: TimeInterval {
-        doghouseService.timeSincePartnerLastRelease()
+        doghouseService.timeSincePartnerLastRelease(
+            accountCreatedAt: authService.partnerProfile?.createdAt,
+            now: currentDate
+        )
     }
 
     private var partnerRoomLevel: RoomLevel {
@@ -110,17 +119,16 @@ struct HomeView: View {
     /// currentDate ticks every second, so these flip off automatically.
     private static let rosesDisplayWindow: TimeInterval = 5 * 3600
 
-    /// Whether anything on screen is actually counting.
+    /// Whether the per-second tick should be running.
     ///
-    /// The 1 Hz tick invalidates this whole view, so it must not run when
-    /// there is no elapsed-time label, immunity countdown, or rose bouquet
-    /// to update — otherwise the Home tab re-renders once a second for the
-    /// entire session, including while the user is on another tab.
+    /// Home always shows a seconds-resolution counter — the doghouse stint
+    /// when you're in it, "You've been home for" when you're not — so the only
+    /// thing that legitimately stops the clock is the app leaving the
+    /// foreground. This used to also require an active doghouse event, roses,
+    /// or unexpired immunity, which froze the home counter the moment the
+    /// hour of post-release immunity ran out.
     private var needsSecondTicks: Bool {
-        if doghouseService.iAmInDoghouse || doghouseService.partnerIsInDoghouse { return true }
-        if doghouseService.myRosesSentAt != nil || doghouseService.partnerRosesSentAt != nil { return true }
-        if let immunityEnd = authService.userProfile?.immunityUntil, immunityEnd > currentDate { return true }
-        return false
+        scenePhase == .active
     }
 
     private func syncTimer() {
@@ -247,9 +255,17 @@ struct HomeView: View {
                     try? await Task.sleep(for: .seconds(60))
                 }
             }
-            .onChange(of: doghouseService.myDoghouseEvent?.id) { _, _ in syncTimer() }
-            .onChange(of: doghouseService.partnerDoghouseEvent?.id) { _, _ in syncTimer() }
-            .onChange(of: doghouseService.myRosesSentAt) { _, _ in syncTimer() }
+            // Coming back from the background: the clock moved on without us,
+            // so refresh immediately instead of showing a stale reading until
+            // the next tick, and restart the tick that backgrounding stopped.
+            .onChange(of: scenePhase, initial: true) { _, phase in
+                if phase == .active {
+                    currentDate = Date()
+                    checkForLevelUp()
+                    maybeAwardTreats()
+                }
+                syncTimer()
+            }
             .animation(.spring(duration: 0.5), value: doghouseService.myDoghouseEvent?.id)
             .animation(.spring(duration: 0.5), value: doghouseService.partnerDoghouseEvent?.id)
             .overlay(alignment: .top) {
