@@ -13,7 +13,6 @@
 //
 
 import SwiftUI
-import Combine
 import FirebaseFirestore
 import WidgetKit
 import PhotosUI
@@ -35,8 +34,10 @@ struct HomeView: View {
     @State private var activeGameSheet: GameSheet?
     @State private var photoPick: PhotosPickerItem?
     @State private var isSubmittingPhoto = false
-    @State private var timer = Timer.publish(every: 1, on: .main, in: .common)
-    @State private var timerConnection: (any Cancellable)?
+    /// Coarse "now" for everything that changes over minutes and hours: room
+    /// level, treat accrual, the 5-hour rose window, "sent 2 hours ago", the
+    /// immunity countdown. Refreshed once a minute and on foregrounding.
+    /// Seconds counters do not use this — see `ElapsedTimeText`.
     @State private var currentDate = Date()
     @State private var showLevelUpToast = false
     @State private var lastSeenLevel: RoomLevel = .bareBones
@@ -78,9 +79,9 @@ struct HomeView: View {
         authService.partnerProfile?.cosmetics ?? .none
     }
 
-    /// Time since I was last released (drives my room progression).
-    /// Derived from `currentDate` so it advances with the tick rather than
-    /// reading the clock independently of what triggered the redraw.
+    /// Time since I was last released (drives my room progression and treat
+    /// accrual — both change over hours, so the minute-resolution
+    /// `currentDate` is the right clock here).
     private var timeSinceMyRelease: TimeInterval {
         doghouseService.timeSinceMyLastRelease(
             accountCreatedAt: authService.userProfile?.createdAt,
@@ -116,29 +117,17 @@ struct HomeView: View {
     }
 
     /// Rose bouquets stay next to the dog for 5 hours after sending.
-    /// currentDate ticks every second, so these flip off automatically.
+    /// The minute poll refreshes `currentDate`, so these flip off on their own.
     private static let rosesDisplayWindow: TimeInterval = 5 * 3600
 
-    /// Whether the per-second tick should be running.
-    ///
-    /// Home always shows a seconds-resolution counter — the doghouse stint
-    /// when you're in it, "You've been home for" when you're not — so the only
-    /// thing that legitimately stops the clock is the app leaving the
-    /// foreground. This used to also require an active doghouse event, roses,
-    /// or unexpired immunity, which froze the home counter the moment the
-    /// hour of post-release immunity ran out.
-    private var needsSecondTicks: Bool {
-        scenePhase == .active
-    }
-
-    private func syncTimer() {
-        if needsSecondTicks, timerConnection == nil {
-            currentDate = Date()
-            timerConnection = timer.connect()
-        } else if !needsSecondTicks, timerConnection != nil {
-            timerConnection?.cancel()
-            timerConnection = nil
-        }
+    /// When my current stay at home began — the anchor for the live counter.
+    /// nil only in the moment before the profile has loaded.
+    private var myHomeStart: Date? {
+        DoghouseService.homeStartDate(
+            history: doghouseService.doghouseHistory,
+            receiverId: doghouseService.userId,
+            accountCreatedAt: authService.userProfile?.createdAt
+        )
     }
 
     private var myRosesActive: Bool {
@@ -239,16 +228,11 @@ struct HomeView: View {
                     MyCardsSheet(challengeService: challengeService, cardCount: myWishCards, partnerName: partnerName)
                 }
             }
-            // The 1 Hz tick only refreshes elapsed-time labels, and runs only
-            // while one is on screen.
-            .onReceive(timer) { date in
-                currentDate = date
-            }
             // Level-ups are hours apart and treats accrue per whole hour, so
-            // these poll once a minute instead of 60× more often than needed.
+            // these poll once a minute. The seconds counters tick themselves
+            // (ElapsedTimeText) rather than invalidating this whole body.
             .task {
                 while !Task.isCancelled {
-                    syncTimer()
                     currentDate = Date()
                     checkForLevelUp()
                     maybeAwardTreats()
@@ -257,14 +241,12 @@ struct HomeView: View {
             }
             // Coming back from the background: the clock moved on without us,
             // so refresh immediately instead of showing a stale reading until
-            // the next tick, and restart the tick that backgrounding stopped.
-            .onChange(of: scenePhase, initial: true) { _, phase in
-                if phase == .active {
-                    currentDate = Date()
-                    checkForLevelUp()
-                    maybeAwardTreats()
-                }
-                syncTimer()
+            // the next minute poll comes round.
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                currentDate = Date()
+                checkForLevelUp()
+                maybeAwardTreats()
             }
             .animation(.spring(duration: 0.5), value: doghouseService.myDoghouseEvent?.id)
             .animation(.spring(duration: 0.5), value: doghouseService.partnerDoghouseEvent?.id)
@@ -702,9 +684,11 @@ struct HomeView: View {
             Text("You've been home for:")
                 .font(.dhCaption)
                 .foregroundStyle(.secondary)
-            Text(timeSinceMyRelease.formattedTimer)
-                .font(.dhTimer)
-                .foregroundStyle(Color.freedomGreen)
+            if let myHomeStart {
+                ElapsedTimeText(start: myHomeStart)
+                    .font(.dhTimer)
+                    .foregroundStyle(Color.freedomGreen)
+            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("You've been home for \(timeSinceMyRelease.formattedDuration)")
@@ -725,7 +709,7 @@ struct HomeView: View {
                     .font(.dhTitle)
                     .multilineTextAlignment(.center)
 
-                Text(currentDate.timeIntervalSince(event.startedAt).formattedTimer)
+                ElapsedTimeText(start: event.startedAt)
                     .font(.dhTimer)
                     .foregroundStyle(.red)
             }

@@ -4,7 +4,6 @@
 //
 
 import SwiftUI
-import Combine
 
 struct VoteEventView: View {
     @ObservedObject var voteService: VoteService
@@ -13,19 +12,11 @@ struct VoteEventView: View {
     // Mock user data for the doghoused users
     var doghousedUsers: [UserProfile]
 
-    @State private var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    @State private var currentDate = Date()
     @State private var showConfetti = false
     @State private var isResolving = false
     @State private var resolvedWinnerId: String?
-
-    private var timeRemaining: TimeInterval {
-        max(voteEvent.endsAt.timeIntervalSince(currentDate), 0)
-    }
-
-    private var isExpired: Bool {
-        timeRemaining <= 0
-    }
+    /// Flipped once, when the deadline passes — not polled every second.
+    @State private var isExpired = false
 
     var body: some View {
         ScrollView {
@@ -46,9 +37,16 @@ struct VoteEventView: View {
                     Text("Time Remaining")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(timeRemaining.formattedTimer)
-                        .font(Font.dhTimer)
-                        .foregroundStyle(timeRemaining < 300 ? .red : Color.cozyOrange)
+                    // Only this label needs a per-second redraw; driving it
+                    // from view state re-rendered every candidate card and
+                    // avatar once a second too.
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let remaining = max(voteEvent.endsAt.timeIntervalSince(context.date), 0)
+                        Text(remaining.formattedTimer)
+                            .font(Font.dhTimer)
+                            .monospacedDigit()
+                            .foregroundStyle(remaining < 300 ? .red : Color.cozyOrange)
+                    }
                 }
                 .padding()
                 .frame(maxWidth: .infinity)
@@ -67,9 +65,16 @@ struct VoteEventView: View {
                 }
             }
         }
-        .onReceive(timer) { date in
-            currentDate = date
-            guard timeRemaining <= 0, !isResolving, resolvedWinnerId == nil else { return }
+        // Wait out the deadline instead of asking "are we there yet?" sixty
+        // times a minute. Fires immediately for an already-expired event.
+        .task(id: voteEvent.id) {
+            let delay = voteEvent.endsAt.timeIntervalSinceNow
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+            }
+            isExpired = true
+            guard !isResolving, resolvedWinnerId == nil else { return }
             isResolving = true
             // Compute winner locally for immediate display; the server
             // (resolveExpiredVotes) is the authority and performs the release.
