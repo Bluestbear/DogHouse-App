@@ -262,22 +262,22 @@ struct DoghouseScene: View {
             // Shadow on the ground
             Ellipse().fill(Color.black.opacity(0.28)).frame(width: 205, height: 22).offset(y: 77)
 
-            houseBody.offset(y: 25)
-            // Overhang shadow the roof throws on the wall
-            Rectangle().fill(Color.black.opacity(0.22)).frame(width: 172, height: 9).offset(y: -20)
+            houseBody.offset(y: 20)
+            // Shadow the roof slab throws on the wall
+            Rectangle().fill(Color.black.opacity(0.22)).frame(width: 160, height: 6).offset(y: -30)
 
-            roof.offset(y: -15)
+            roof.offset(y: -38)
 
-            if stage.showRoofPatch { roofPatch.offset(x: 38, y: -32).transition(.opacity) }
-            if stage.showIcicles { icicleRow.offset(y: 16).transition(.opacity) }
-            if stage.showDirty { cobweb.offset(x: -70, y: -12).transition(.opacity) }
+            if stage.showRoofPatch { roofPatch.offset(x: 42, y: -39).transition(.opacity) }
+            if stage.showIcicles { icicleRow.offset(y: -22).transition(.opacity) }
+            if stage.showDirty { cobweb.offset(x: -70, y: -20).transition(.opacity) }
 
             door.offset(y: 37)
 
             // The dog, with everything that happens to it
             dog.offset(y: 30)
 
-            nameplate.offset(y: -2)
+            nameplate.offset(y: -14)
 
             if stage.showHunger {
                 thoughtBubble.offset(x: 62, y: -22).transition(.scale.combined(with: .opacity))
@@ -311,7 +311,7 @@ struct DoghouseScene: View {
             ForEach(0..<4, id: \.self) { i in
                 ForEach([-70, 70], id: \.self) { x in
                     Circle().fill(Color.black.opacity(0.35)).frame(width: 2.5)
-                        .offset(x: CGFloat(x), y: CGFloat(i * 20 - 30))
+                        .offset(x: CGFloat(x), y: CGFloat(i * 22 - 34))
                 }
             }
             if stage.showDirty {
@@ -326,38 +326,34 @@ struct DoghouseScene: View {
             }
             RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.35), lineWidth: 1)
         }
-        .frame(width: 160, height: 102)
+        .frame(width: 160, height: 112)
     }
 
+    /// A flat roof: a slab of planks overhanging the walls by a hand's width.
     private var roof: some View {
         ZStack {
-            Triangle()
+            RoundedRectangle(cornerRadius: 4)
                 .fill(LinearGradient(colors: [roofTop, roofBottom], startPoint: .top, endPoint: .bottom))
-            // Shingle courses
-            VStack(spacing: 15) {
-                ForEach(0..<4, id: \.self) { i in
-                    HStack(spacing: 10) {
-                        ForEach(0..<8, id: \.self) { _ in
-                            RoundedRectangle(cornerRadius: 1).fill(Color.black.opacity(0.22)).frame(width: 14, height: 1.5)
-                        }
-                    }
-                    .offset(x: i % 2 == 0 ? 0 : 12)
+            // Two plank seams along the slab
+            VStack(spacing: 4) {
+                ForEach(0..<2, id: \.self) { _ in
+                    Rectangle().fill(Color.black.opacity(0.25)).frame(height: 1.2)
                 }
             }
-            .offset(y: 8)
-            .clipShape(Triangle())
-            // Ridge highlight
-            Path { p in
-                p.move(to: CGPoint(x: 0, y: 70)); p.addLine(to: CGPoint(x: 95, y: 0)); p.addLine(to: CGPoint(x: 190, y: 70))
-            }
-            .stroke(Color.white.opacity(0.18), lineWidth: 2)
+            .padding(.horizontal, 6)
+            // Lit top edge
+            RoundedRectangle(cornerRadius: 4).stroke(Color.white.opacity(0.14), lineWidth: 1.5)
+                .mask(alignment: .top) { Rectangle().frame(height: 3) }
+            RoundedRectangle(cornerRadius: 4).stroke(Color.black.opacity(0.4), lineWidth: 1)
             if stage.showSnow {
-                Triangle().fill(Color.white.opacity(0.92))
-                    .mask(alignment: .top) { Rectangle().frame(height: 18) }
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.white.opacity(0.92))
+                    .frame(width: 180, height: 9)
+                    .offset(y: -9)
                     .transition(.opacity)
             }
         }
-        .frame(width: 190, height: 70)
+        .frame(width: 178, height: 16)
     }
 
     private var door: some View {
@@ -534,7 +530,7 @@ struct DoghouseScene: View {
             .overlay(HStack(spacing: 5) {
                 ForEach(0..<3, id: \.self) { _ in Circle().fill(Color.black.opacity(0.55)).frame(width: 2) }
             })
-            .rotationEffect(.degrees(-22))
+            .rotationEffect(.degrees(-5))
     }
 
     private var icicleRow: some View {
