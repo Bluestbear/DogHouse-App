@@ -52,6 +52,8 @@ struct HomeView: View {
     @State private var scenePageIndex = 0
     @State private var showBellyRubToast = false
     @State private var bellyRubSenderName = ""
+    /// Bumped when a belly rub arrives so my dog hops.
+    @State private var myJumpTrigger = 0
     @State private var showRosesToast = false
     @State private var rosesSenderName = ""
     @State private var isSendingRoses = false
@@ -305,6 +307,7 @@ struct HomeView: View {
             .onChange(of: doghouseService.receivedBellyRub) { _, senderName in
                 guard let senderName else { return }
                 bellyRubSenderName = senderName
+                myJumpTrigger += 1
                 HapticService.shared.success()
                 withAnimation(.spring(duration: 0.4)) { showBellyRubToast = true }
                 Task {
@@ -471,7 +474,8 @@ struct HomeView: View {
                 duration: currentDate.timeIntervalSince(myEvent.startedAt),
                 avatarId: myAvatarId,
                 cosmetics: myCosmetics,
-                showRoses: myRosesActive
+                showRoses: myRosesActive,
+                jumpTrigger: myJumpTrigger
             )
             .accessibilityHidden(true)
         } else {
@@ -481,7 +485,8 @@ struct HomeView: View {
                 level: currentRoomLevel,
                 avatarId: myAvatarId,
                 cosmetics: myCosmetics,
-                showRoses: myRosesActive
+                showRoses: myRosesActive,
+                jumpTrigger: myJumpTrigger
             )
             .accessibilityHidden(true)
         }
@@ -739,7 +744,12 @@ struct HomeView: View {
     /// (1-5/hr). The server computes the actual amount from event history and
     /// is the authority — this only avoids calling it more than once an hour.
     private func maybeAwardTreats() {
-        guard !isAwardingTreats, doghouseService.myDoghouseEvent == nil else { return }
+        // Treats are the couple's reward for BOTH being home. Nobody earns
+        // while their partner is in the doghouse — the server enforces this
+        // too; skipping the call here just avoids a pointless round trip.
+        guard !isAwardingTreats,
+              doghouseService.myDoghouseEvent == nil,
+              !doghouseService.partnerIsInDoghouse else { return }
 
         let due: Bool
         if let lastAward = authService.userProfile?.lastTreatAward {

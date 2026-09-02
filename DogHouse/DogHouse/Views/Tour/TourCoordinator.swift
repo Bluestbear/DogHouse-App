@@ -114,7 +114,7 @@ enum TourStep: Int, CaseIterable, Sendable {
             return TourStepContent(
                 emoji: "🏠",
                 title: "This is your dog at home",
-                body: "When things are good, your dog chills in the living room. The longer you stay out of trouble, the cozier it gets — there are 10 room levels to unlock."
+                body: "When things are good, your dog chills in the living room. The longer you stay out of trouble, the cozier it gets."
             )
         case .partnerRoom:
             return TourStepContent(
@@ -132,7 +132,7 @@ enum TourStep: Int, CaseIterable, Sendable {
             return TourStepContent(
                 emoji: "🦴",
                 title: "Earn treats at home",
-                body: "Every hour your dog spends at home earns treats — more at higher room levels. A stint in the DogHouse resets your room, so be good to each other!"
+                body: "Every hour you're both at home earns treats — more at higher room levels. If either of you is in the DogHouse, the treats stop, so be good to each other!"
             )
         case .sendButton:
             return TourStepContent(

@@ -33,8 +33,11 @@ struct LivingRoomScene: View {
     var onBellyRub: (() -> Void)? = nil
     /// Show the received rose bouquet next to the dog (fades after 5h)
     var showRoses: Bool = false
+    /// Bump this to make the dog hop — a belly rub just landed.
+    var jumpTrigger: Int = 0
 
     @State private var showBellyRubBurst = false
+    @State private var hop = DogHop()
 
     // The scene is decorative: it is assembled from emoji and shapes
     // that mean nothing read aloud. The accompanying status text
@@ -177,6 +180,7 @@ struct LivingRoomScene: View {
                             avatarView
                                 .scaleEffect(showBellyRubBurst ? 1.14 : 1.0)
                                 .animation(.spring(duration: 0.25), value: showBellyRubBurst)
+                                .dogHop(hop)
 
                             if showBellyRubBurst {
                                 HeartBurstView()
@@ -196,12 +200,14 @@ struct LivingRoomScene: View {
                                     guard onBellyRub != nil else { return }
                                     onBellyRub?()
                                     showBellyRubBurst = true
+                                    DogHop.perform($hop)
                                     Task {
                                         try? await Task.sleep(for: .seconds(1.6))
                                         showBellyRubBurst = false
                                     }
                                 }
                         )
+                        .onChange(of: jumpTrigger) { _, _ in DogHop.perform($hop) }
 
                         if level.hasBanner {
                             Text("👑 ROYALTY")
@@ -806,4 +812,37 @@ struct HeartBurstView: View {
 
 #Preview("Level 10 - Palace") {
     LivingRoomScene(partnerName: "Alex", isCurrentUser: false, level: .palace)
+}
+
+
+// MARK: - Dog Hop
+
+/// A little jump with squash-and-stretch, shared by both room scenes.
+struct DogHop {
+    var lift: CGFloat = 0
+    var stretch: CGFloat = 1
+
+    /// Lift now, land a beat later. Takes the binding because the landing
+    /// has to write back after the view's own call has returned.
+    static func perform(_ hop: Binding<DogHop>) {
+        withAnimation(.spring(duration: 0.22, bounce: 0.15)) {
+            hop.wrappedValue.lift = -26
+            hop.wrappedValue.stretch = 1.08
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(220))
+            withAnimation(.spring(duration: 0.4, bounce: 0.45)) {
+                hop.wrappedValue.lift = 0
+                hop.wrappedValue.stretch = 1
+            }
+        }
+    }
+}
+
+extension View {
+    func dogHop(_ hop: DogHop) -> some View {
+        self
+            .scaleEffect(x: 2 - hop.stretch, y: hop.stretch, anchor: .bottom)
+            .offset(y: hop.lift)
+    }
 }

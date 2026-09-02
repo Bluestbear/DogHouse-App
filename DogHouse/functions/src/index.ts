@@ -1102,11 +1102,16 @@ export const releasePartner = onCall({ region: REGION }, async (req) => {
         isActive: false, endedAt: now,
         releasedBy: byRedemption ? "redemption" : "sender",
       });
-      // Grant the released dog immunity (was previously a client self-write)
+      // Grant the released dog immunity (was previously a client self-write).
+      // Both partners' treat clocks restart now: claimHomeTreats pays for
+      // every hour since lastTreatAward, and without this reset the hours one
+      // of them spent in the doghouse would be paid out at release.
       tx.update(db.collection("users").doc(ev.receiverId as string), {
         immunityUntil: Timestamp.fromMillis(now.toMillis() + IMMUNITY_SECONDS * 1000),
+        lastTreatAward: now,
         ...(byRedemption ? { treats: FieldValue.increment(REDEMPTION_TREATS) } : {}),
       });
+      tx.update(db.collection("users").doc(uid), { lastTreatAward: now });
       return false;
     });
 
@@ -1271,11 +1276,18 @@ export const claimHomeTreats = onCall({ region: REGION }, async (req) => {
   return once(uid, req.data?.idempotencyKey, async () => {
     const meRef = db.collection("users").doc(uid);
 
-    // Guard: no award while currently in the doghouse. Racing this guard is
-    // harmless (worst case one extra idle award), so it stays outside.
-    const active = await db.collection("doghouseEvents")
-      .where("receiverId", "==", uid).where("isActive", "==", true).limit(1).get();
-    if (!active.empty) return { ok: true, awarded: 0 };
+    // Guard: no award while EITHER partner is in the doghouse. Treats are the
+    // couple's reward for both behaving, not one partner's idle income while
+    // the other sits in the rain. Racing this guard is harmless (worst case
+    // one extra idle award), so it stays outside the transaction.
+    const inDoghouse = async (id: string) =>
+      !(await db.collection("doghouseEvents")
+        .where("receiverId", "==", id).where("isActive", "==", true).limit(1).get()).empty;
+    if (await inDoghouse(uid)) return { ok: true, awarded: 0 };
+    const partnerId = (await meRef.get()).data()?.partnerId as string | undefined;
+    if (partnerId && partnerId !== "skipped" && await inDoghouse(partnerId)) {
+      return { ok: true, awarded: 0 };
+    }
 
     // Rate scales with room level (time since last release), matching the client.
     const rate = Math.max(1, Math.min(5, Number(req.data?.treatsPerHour ?? 1)));

@@ -70,6 +70,50 @@ enum DoghouseStage: Int, CaseIterable {
     var showSnow: Bool { rawValue >= 8 }         // rain turns to snow
     var showIcicles: Bool { rawValue >= 8 }
 
+    // MARK: Stacked weather
+    // Each of these only ever gets worse with time served, so the scene can
+    // layer them: drizzle joins the clouds, becomes rain, then a storm with
+    // lightning, and finally snow — while the dog shivers harder throughout.
+
+    /// 0 = dry, 1 = downpour. Snow at the final stage falls more gently.
+    var rainIntensity: Double {
+        switch self {
+        case .justArrived, .gettingHungry: 0
+        case .cloudsGathering: 0.3
+        case .rainy: 0.6
+        case .gettingDirty, .mouseFriend: 0.8
+        case .stormyNight: 1.0
+        case .fullSurvival: 0.7
+        }
+    }
+
+    /// 0 = still, 3 = teeth chattering.
+    var shiverLevel: Int {
+        switch self {
+        case .justArrived, .gettingHungry, .cloudsGathering: 0
+        case .rainy, .gettingDirty: 1
+        case .mouseFriend, .stormyNight: 2
+        case .fullSurvival: 3
+        }
+    }
+
+    enum Lightning { case none, distant, storm }
+
+    /// Distant flashes on the horizon first, then bolts overhead.
+    var lightning: Lightning {
+        rawValue >= 7 ? .storm : rawValue >= 6 ? .distant : .none
+    }
+
+    var isNight: Bool { rawValue >= 6 }
+
+    /// 0 = calm, 1 = gale. Tilts the rain and shakes the tree.
+    var windStrength: Double {
+        rawValue >= 7 ? 1 : rawValue >= 5 ? 0.4 : 0
+    }
+
+    /// How far into the misery we are, 0...1 — drives every colour in the scene.
+    var gloom: Double { Double(rawValue - 1) / Double(DoghouseStage.allCases.count - 1) }
+
     static func stage(for duration: TimeInterval) -> DoghouseStage {
         let sorted = allCases.reversed()
         for stage in sorted {

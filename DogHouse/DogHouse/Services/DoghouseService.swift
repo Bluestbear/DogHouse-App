@@ -59,7 +59,29 @@ class DoghouseService: ObservableObject {
     private var historySentEvents: [DoghouseEvent] = []
     private var historyReceivedEvents: [DoghouseEvent] = []
 
+    #if DEBUG
+    /// Launch with `-demoDoghouseHours 30` (alongside `-demoOnboarding`) to
+    /// see yourself in the doghouse that many hours in, without a Firestore
+    /// event. Drives the scene's weather stages for previews and screenshots.
+    static var demoDoghouseHours: Double? {
+        let h = UserDefaults.standard.double(forKey: "demoDoghouseHours")
+        return h > 0 ? h : nil
+    }
+    #endif
+
     init(userId: String, partnerId: String? = nil) {
+        #if DEBUG
+        if let hours = DoghouseService.demoDoghouseHours {
+            self.userId = "demo_me"
+            self.partnerId = "demo_partner"
+            self.myDoghouseEvent = DoghouseEvent(
+                id: "demo", senderId: "demo_partner", receiverId: "demo_me",
+                reason: "Left the dishes again", suggestion: "Cook dinner",
+                startedAt: Date().addingTimeInterval(-hours * 3600), endedAt: nil, isActive: true
+            )
+            return
+        }
+        #endif
         // Resolve real user ID from Firebase Auth when views pass "mock_user"
         if userId == "mock_user", let realUid = Auth.auth().currentUser?.uid {
             self.userId = realUid

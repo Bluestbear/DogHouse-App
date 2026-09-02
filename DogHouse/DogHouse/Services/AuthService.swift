@@ -65,11 +65,14 @@ class AuthService: ObservableObject {
         isAuthInitialized = true
         isAuthenticated = true
         partnerCode = "DEMO42"
+        // A demo doghouse stint skips straight to Home: the point of it is the
+        // scene, not the onboarding, and the tour would sit on top of it.
+        let straightToHome = DoghouseService.demoDoghouseHours != nil
         userProfile = UserProfile(
-            id: "demo_me", displayName: "", avatarId: nil, partnerCode: nil,
-            partnerId: nil, immunityUntil: nil, friendIds: [], createdAt: Date(),
-            fcmToken: nil, graceCharges: UserProfile.maxGraceCharges,
-            lastGraceRecharge: Date(), tourComplete: false, onboardingComplete: false
+            id: "demo_me", displayName: straightToHome ? "Harrison" : "", avatarId: straightToHome ? "dog_1" : nil,
+            partnerCode: nil, partnerId: straightToHome ? "demo_partner" : nil, immunityUntil: nil,
+            friendIds: [], createdAt: Date(), fcmToken: nil, graceCharges: UserProfile.maxGraceCharges,
+            lastGraceRecharge: Date(), tourComplete: straightToHome, onboardingComplete: straightToHome
         )
         partnerProfile = UserProfile(
             id: "demo_partner", displayName: "Sam", avatarId: "dog_3", partnerCode: nil,

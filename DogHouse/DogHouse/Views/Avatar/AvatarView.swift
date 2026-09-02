@@ -15,7 +15,14 @@ struct AvatarView: View {
     var blinks: Bool = true
 
     @State private var isBlinking = false
+    @State private var wag = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// A happy dog wags; a dog in the doghouse does not. Shares the `blinks`
+    /// switch so dense grids stay still.
+    private var isWagging: Bool {
+        blinks && !reduceMotion && (mood == .happy || mood == .cozy)
+    }
 
     private var scale: CGFloat { size / 80.0 }
 
@@ -46,6 +53,15 @@ struct AvatarView: View {
         }
         .frame(width: size, height: size)
         .accessibilityLabel("\(avatar.name) dog, feeling \(mood.rawValue)")
+        .task(id: isWagging) {
+            // Starting a repeating animation on a state flag confines it to that
+            // flag; stopping is a plain (non-repeating) write of the same flag.
+            if isWagging {
+                withAnimation(.easeInOut(duration: 0.26).repeatForever(autoreverses: true)) { wag = true }
+            } else {
+                withAnimation(.easeOut(duration: 0.2)) { wag = false }
+            }
+        }
         .task(id: blinks && !reduceMotion) {
             guard blinks && !reduceMotion else { return }
             // Desync avatars that appear on screen together
@@ -80,6 +96,8 @@ struct AvatarView: View {
         }
         .stroke(avatar.primaryColor, lineWidth: 10 * scale)
         .frame(width: 34 * scale, height: 28 * scale)
+        // Wag about the root of the tail (its bottom-left end), not the frame centre.
+        .rotationEffect(.degrees(wag ? 16 : -12), anchor: UnitPoint(x: 0.08, y: 0.72))
         .offset(x: 18 * scale, y: 10 * scale)
     }
 
