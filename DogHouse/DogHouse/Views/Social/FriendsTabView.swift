@@ -19,9 +19,11 @@ struct FriendsTabView: View {
     @State private var showError = false
     @State private var errorText = ""
     @State private var coupleToRemove: FriendCouple?
+    @ObservedObject private var tour = TourCoordinator.shared
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             List {
                 // Jailbreak votes — two dogs from friended couples in at once
                 ForEach(voteService.activeJointVotes) { vote in
@@ -72,6 +74,20 @@ struct FriendsTabView: View {
             } message: {
                 Text("You'll stop seeing each other's public sendings.")
             }
+            // The feed can push "Add a Couple" below the fold; the tour
+            // points at it, so bring it up when that step arrives.
+            // `initial: true` matters: this tab is created lazily when the tour
+            // switches to it, so by the time it exists the step has already
+            // changed and a plain onChange would never fire. The short delay
+            // lets the List lay out its rows before scrolling to one.
+            .onChange(of: tour.currentStep, initial: true) { _, step in
+                guard step == .friends else { return }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    withAnimation { proxy.scrollTo("tour-add-couple", anchor: .center) }
+                }
+            }
+            } // ScrollViewReader
         }
     }
 
@@ -142,6 +158,8 @@ struct FriendsTabView: View {
                         .foregroundStyle(.red)
                 }
             }
+            .tourAnchor(.addCouple)
+            .id("tour-add-couple")
         } header: {
             Text("Add a Couple")
         } footer: {

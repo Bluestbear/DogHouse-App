@@ -36,12 +36,21 @@ struct RootView: View {
                 Color.cozyOrange.opacity(0.15)
                     .ignoresSafeArea()
                     .task {
-                        // Safety fallback: if Firebase Auth never responds, unblock after 3s
+                        // Safety fallback: if Firebase Auth never calls back,
+                        // unblock after 3s. `isAuthenticated` was seeded from
+                        // the keychain-restored user in AuthService.init, so
+                        // this can never bounce a signed-in user to Welcome.
                         try? await Task.sleep(for: .seconds(3))
                         authService.isAuthInitialized = true
                     }
             } else if !authService.isAuthenticated {
                 WelcomeView()
+            } else if authService.userProfile == nil {
+                // Signed in, profile still loading (first launch after a
+                // reinstall, slow network, or a profile being recreated).
+                // Previously this fell through to the pairing screen with a
+                // blank "------" code, which read as a broken account.
+                ProfileLoadingView()
             } else if authService.userProfile?.isOnboardingComplete == true {
                 MainTabView()
             } else {
@@ -50,6 +59,7 @@ struct RootView: View {
         }
         .animation(.easeInOut, value: authService.isAuthInitialized)
         .animation(.easeInOut, value: authService.isAuthenticated)
+        .animation(.easeInOut, value: authService.userProfile == nil)
         .animation(.easeInOut, value: authService.userProfile?.isOnboardingComplete)
     }
 }

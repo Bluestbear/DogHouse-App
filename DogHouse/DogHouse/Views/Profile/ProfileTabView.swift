@@ -21,9 +21,12 @@ struct ProfileTabView: View {
     @State private var unpairError: String?
     @State private var soundEnabled = SoundService.shared.isEnabled
     @State private var hapticEnabled = HapticService.shared.isEnabled
+    @State private var showAppleRevocation = false
+    @ObservedObject private var tour = TourCoordinator.shared
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             List {
                 // User card
                 userCardSection
@@ -78,7 +81,27 @@ struct ProfileTabView: View {
             .sheet(isPresented: $showAnniversaryPicker) {
                 anniversaryPickerSheet
             }
+            .sheet(isPresented: $showAppleRevocation) {
+                AppleRevocationSheet { code in
+                    performDeletion(appleAuthorizationCode: code)
+                }
+                .environmentObject(authService)
+            }
             .errorBanner($unpairError)
+            // The live tour points at the anniversary row; make sure it is
+            // on screen when that step arrives.
+            // `initial: true` matters: this tab is created lazily when the tour
+            // switches to it, so by the time it exists the step has already
+            // changed and a plain onChange would never fire. The short delay
+            // lets the List lay out its rows before scrolling to one.
+            .onChange(of: tour.currentStep, initial: true) { _, step in
+                guard step == .anniversary else { return }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    withAnimation { proxy.scrollTo("tour-anniversary", anchor: .center) }
+                }
+            }
+            } // ScrollViewReader
         }
     }
 
@@ -204,6 +227,7 @@ struct ProfileTabView: View {
 
     private var anniversarySection: some View {
         Section("Anniversary") {
+            Group {
             if let anniversary = challengeService.anniversary {
                 HStack {
                     Label(anniversary.formatted(.dateTime.month(.wide).day()), systemImage: "heart.circle.fill")
@@ -223,6 +247,9 @@ struct ProfileTabView: View {
                         .foregroundStyle(Color.cozyOrange)
                 }
             }
+            }
+            .tourAnchor(.anniversary)
+            .id("tour-anniversary")
         }
     }
 
@@ -278,6 +305,12 @@ struct ProfileTabView: View {
                 showAvatarPicker = true
             } label: {
                 Label("Change Avatar", systemImage: "pawprint.fill")
+            }
+
+            Button {
+                tour.start(replay: true)
+            } label: {
+                Label("Replay App Tour", systemImage: "sparkles")
             }
         }
     }
@@ -363,19 +396,30 @@ struct ProfileTabView: View {
                     .textInputAutocapitalization(.characters)
                 Button("Delete Forever", role: .destructive) {
                     guard deleteConfirmationText == "DELETE" else { return }
-                    isDeleting = true
-                    Task {
-                        do {
-                            try await authService.deleteAccount()
-                        } catch {
-                            unpairError = error.localizedDescription
-                            isDeleting = false
-                        }
+                    if authService.usesAppleSignIn {
+                        // App Store rule: deleting an account that used Sign
+                        // in with Apple must also revoke Apple's token, and
+                        // that needs a fresh authorization code from Apple.
+                        showAppleRevocation = true
+                    } else {
+                        performDeletion(appleAuthorizationCode: nil)
                     }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This permanently erases your profile, history, friendships, and feed posts, and unpairs your partner. It cannot be undone. Type DELETE to confirm.")
+            }
+        }
+    }
+
+    private func performDeletion(appleAuthorizationCode: String?) {
+        isDeleting = true
+        Task {
+            do {
+                try await authService.deleteAccount(appleAuthorizationCode: appleAuthorizationCode)
+            } catch {
+                unpairError = error.localizedDescription
+                isDeleting = false
             }
         }
     }

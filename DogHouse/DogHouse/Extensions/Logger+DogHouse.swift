@@ -21,4 +21,8 @@ extension Logger {
     static let data = Logger(subsystem: subsystem, category: "data")
     /// Push registration and notification routing
     static let push = Logger(subsystem: subsystem, category: "push")
+    /// Sign-in and sign-up failures. The friendly text shown on screen throws
+    /// the provider's error code away; this keeps it so a report of "it doesn't
+    /// work" can be resolved from a console log.
+    static let auth = Logger(subsystem: subsystem, category: "auth")
 }

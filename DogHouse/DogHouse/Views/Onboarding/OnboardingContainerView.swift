@@ -15,6 +15,9 @@ struct OnboardingContainerView: View {
     var body: some View {
         Group {
             switch currentStep {
+            case .loading:
+                ProfileLoadingView()
+
             case .nameEntry:
                 NameEntryView()
 
@@ -23,9 +26,6 @@ struct OnboardingContainerView: View {
 
             case .avatarSelection:
                 AvatarSelectionView()
-
-            case .appTour:
-                AppTourView()
 
             case .taskNegotiation:
                 if let userId = authService.userProfile?.id,
@@ -43,20 +43,25 @@ struct OnboardingContainerView: View {
     // MARK: - Step Determination
 
     private enum OnboardingStep: Equatable {
+        case loading
         case nameEntry
         case waitingForPartner
         case avatarSelection
-        case appTour
         case taskNegotiation
     }
 
+    // The app tour is no longer a step here: it runs live inside MainTabView
+    // (see TourCoordinator) once onboarding is done, so it can point at the
+    // real controls instead of describing them.
     private var currentStep: OnboardingStep {
+        // Signed in, profile not loaded yet. RootView normally holds the
+        // loading screen itself; this is the belt to its braces.
         guard let profile = authService.userProfile else {
-            return .waitingForPartner
+            return .loading
         }
 
-        // Step 1: No usable name. Only reachable from Apple/Google sign-in —
-        // email sign-up collects a name in the form.
+        // Step 1: No usable name — email sign-up, Apple with the name
+        // withheld, or Google without a profile name all land here.
         guard !profile.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .nameEntry
         }
@@ -71,12 +76,7 @@ struct OnboardingContainerView: View {
             return .avatarSelection
         }
 
-        // Step 4: Tour not complete
-        guard profile.isTourComplete else {
-            return .appTour
-        }
-
-        // Step 5: Task negotiation
+        // Step 4: Task negotiation
         return .taskNegotiation
     }
 }

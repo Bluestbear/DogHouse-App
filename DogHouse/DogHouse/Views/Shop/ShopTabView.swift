@@ -12,6 +12,9 @@ struct ShopTabView: View {
     @State private var shopTarget: ShopTarget = .me
     @State private var errorMessage: String?
     @State private var busyItemId: String?
+    @State private var showingTreatPacks = false
+
+    @StateObject private var purchases = PurchaseService.shared
 
     private let shopService = ShopService()
     private let columns = [GridItem(.flexible()), GridItem(.flexible())]
@@ -56,6 +59,10 @@ struct ShopTabView: View {
             .navigationTitle("Shop")
             .navigationBarTitleDisplayMode(.large)
             .background(Color(.systemGroupedBackground))
+            .sheet(isPresented: $showingTreatPacks) {
+                TreatPackSheet()
+                    .environmentObject(authService)
+            }
         }
     }
 
@@ -86,7 +93,8 @@ struct ShopTabView: View {
             }
             .padding(.horizontal, 20)
 
-            // Treat balance
+            // Treat balance — doubles as the way in to buying more, but only
+            // once in-app purchases are actually configured.
             HStack(spacing: 6) {
                 Text("🦴")
                     .font(.title3)
@@ -96,11 +104,23 @@ struct ShopTabView: View {
                 Text("treats")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+
+                if purchases.isAvailable {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(Color.cozyOrange)
+                        .padding(.leading, 2)
+                }
             }
             .padding(.horizontal, 20).padding(.vertical, 10)
             .background(Color(.secondarySystemGroupedBackground))
             .clipShape(Capsule())
             .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
+            .tourAnchor(.treatBalance)
+            .contentShape(Capsule())
+            .onTapGesture {
+                if purchases.isAvailable { showingTreatPacks = true }
+            }
 
             if let err = errorMessage {
                 Text(err)

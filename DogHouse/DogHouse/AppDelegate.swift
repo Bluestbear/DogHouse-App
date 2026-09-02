@@ -25,6 +25,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNot
         // AuthService so a crash can be tied back to a support request.
         Crashlytics.crashlytics().setCrashlyticsCollectionEnabled(true)
 
+        // In-app purchases. Configured at launch; the account is attached
+        // later, when auth resolves (AuthService.listenToAuthState).
+        Task { @MainActor in PurchaseService.shared.configure() }
+
         // Push notification setup. The permission request itself happens in
         // the UI (explainer screen / MainTabView) — never cold at launch.
         Messaging.messaging().delegate = self

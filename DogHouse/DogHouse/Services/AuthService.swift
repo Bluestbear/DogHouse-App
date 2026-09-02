@@ -37,9 +37,48 @@ class AuthService: ObservableObject {
     private let fs = FirebaseService.shared
 
     init() {
+        #if DEBUG
+        if Self.isDemo {
+            configureDemo()
+            return
+        }
+        #endif
+        // Firebase restores the signed-in user from the keychain synchronously
+        // at startup. Seed from it so there is never a frame — nor a fallback
+        // path — on which a signed-in user is treated as signed out.
+        isAuthenticated = Auth.auth().currentUser != nil
         listenToAuthState()
         listenForFCMTokenRefresh()
     }
+
+    #if DEBUG
+    // MARK: - Demo Mode (debug builds only)
+
+    /// Launch the app with the `-demoOnboarding` argument to walk the
+    /// onboarding screens and the live tour with fake data and no account.
+    /// No auth listener is attached and the profile mutations below are
+    /// applied locally, so nothing reaches Firebase. Task negotiation is
+    /// skipped (it needs a real second partner).
+    static let isDemo = ProcessInfo.processInfo.arguments.contains("-demoOnboarding")
+
+    private func configureDemo() {
+        isAuthInitialized = true
+        isAuthenticated = true
+        partnerCode = "DEMO42"
+        userProfile = UserProfile(
+            id: "demo_me", displayName: "", avatarId: nil, partnerCode: nil,
+            partnerId: nil, immunityUntil: nil, friendIds: [], createdAt: Date(),
+            fcmToken: nil, graceCharges: UserProfile.maxGraceCharges,
+            lastGraceRecharge: Date(), tourComplete: false, onboardingComplete: false
+        )
+        partnerProfile = UserProfile(
+            id: "demo_partner", displayName: "Sam", avatarId: "dog_3", partnerCode: nil,
+            partnerId: "demo_me", immunityUntil: nil, friendIds: [], createdAt: Date(),
+            fcmToken: nil, graceCharges: UserProfile.maxGraceCharges,
+            lastGraceRecharge: Date(), tourComplete: true, onboardingComplete: true
+        )
+    }
+    #endif
 
     isolated deinit {
         if let handle = authStateListener {
@@ -93,8 +132,12 @@ class AuthService: ObservableObject {
                     Crashlytics.crashlytics().setUserID(user.uid)
                     self.listenToUserDocument(userId: user.uid)
                     self.listenToPrivateDocument(userId: user.uid)
+                    // Purchases must be attributed to the Firebase uid — the
+                    // webhook credits users/{app_user_id}.
+                    Task { await PurchaseService.shared.login(uid: user.uid) }
                 } else {
                     Crashlytics.crashlytics().setUserID("")
+                    Task { await PurchaseService.shared.logOut() }
                     self.isAuthenticated = false
                     self.userProfile = nil
                     self.partnerCode = nil
@@ -102,6 +145,12 @@ class AuthService: ObservableObject {
                     self.userDocListener = nil
                     self.privateDocListener?.remove()
                     self.privateDocListener = nil
+                    // The partner listener used to survive sign-out. Signing
+                    // in as someone else then showed the previous account's
+                    // partner until their own listener happened to fire.
+                    self.partnerDocListener?.remove()
+                    self.partnerDocListener = nil
+                    self.partnerProfile = nil
                 }
             }
         }
@@ -164,7 +213,14 @@ class AuthService: ObservableObject {
                 // Auth account was created) would otherwise strand the account
                 // on the pairing screen forever, with no code and no way to mint
                 // one. Recreate it instead.
+                //
+                // Only trust the server on this. Offline, Firestore answers a
+                // never-cached document with an `exists == false` snapshot
+                // straight from the (empty) cache; acting on that would try to
+                // re-bootstrap a perfectly good account every time it launches
+                // without a connection.
                 guard snapshot.exists else {
+                    guard !snapshot.metadata.isFromCache else { return }
                     await self.recoverMissingProfile(userId: userId)
                     return
                 }
@@ -320,9 +376,15 @@ class AuthService: ObservableObject {
     /// Set the name shown to the partner. Used by the onboarding name step,
     /// which appears when a provider gave us no usable name.
     func updateDisplayName(_ name: String) async throws {
-        guard let uid = Auth.auth().currentUser?.uid else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        #if DEBUG
+        if Self.isDemo {
+            userProfile?.displayName = trimmed
+            return
+        }
+        #endif
+        guard let uid = Auth.auth().currentUser?.uid else { return }
         try await fs.usersCollection.document(uid).updateData(["displayName": trimmed])
     }
 
@@ -351,6 +413,30 @@ class AuthService: ObservableObject {
         if let uid = Auth.auth().currentUser?.uid,
            let fcmToken = UserDefaults.standard.string(forKey: "fcmToken") {
             await writeFCMToken(fcmToken, uid: uid)
+        }
+    }
+
+    // MARK: - Password Reset
+
+    /// Email a password reset link. With Firebase's email-enumeration
+    /// protection on (the default for new projects) this succeeds silently
+    /// for unknown addresses, so callers should word the confirmation as
+    /// "if an account exists" rather than as a promise.
+    func sendPasswordReset(email: String) async throws {
+        try await Auth.auth().sendPasswordReset(withEmail: email)
+    }
+
+    // MARK: - App Tour
+
+    /// Record that the live tour has been seen. A replay from Profile finds
+    /// the flag already set and writes nothing.
+    func markTourComplete() async {
+        guard let uid = Auth.auth().currentUser?.uid,
+              userProfile?.isTourComplete != true else { return }
+        do {
+            try await fs.usersCollection.document(uid).updateData(["tourComplete": true])
+        } catch {
+            Logger.data.error("tourComplete write failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -510,11 +596,35 @@ class AuthService: ObservableObject {
         }
     }
 
+    /// Whether this account signed in with Apple. App Store Review Guideline
+    /// 5.1.1(v) requires such accounts to have their Sign in with Apple token
+    /// revoked as part of account deletion.
+    var usesAppleSignIn: Bool {
+        Auth.auth().currentUser?.providerData.contains { $0.providerID == "apple.com" } ?? false
+    }
+
     /// Request permanent account deletion. Writes a deletion request that the
     /// onDeletionRequest Cloud Function processes (wipes all data + the Auth
     /// account with admin privileges), then signs out locally.
-    func deleteAccount() async throws {
+    ///
+    /// - Parameter appleAuthorizationCode: a fresh code from Sign in with
+    ///   Apple, used to revoke Apple's token first. Revocation failing must
+    ///   not block deletion — the user's right to delete beats the paperwork —
+    ///   so it is logged and the wipe proceeds. Requires the Apple provider in
+    ///   the Firebase console to be configured with the Services ID, team ID,
+    ///   key ID and private key; without those Firebase cannot call Apple.
+    func deleteAccount(appleAuthorizationCode: String? = nil) async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
+
+        if let code = appleAuthorizationCode {
+            do {
+                try await Auth.auth().revokeToken(withAuthorizationCode: code)
+                Logger.auth.info("Revoked Sign in with Apple token before deletion")
+            } catch {
+                Logger.auth.error("Apple token revocation failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
         try await fs.db.collection("deletionRequests").document(uid).setData([
             "requestedAt": Timestamp(date: Date())
         ])
@@ -526,6 +636,14 @@ class AuthService: ObservableObject {
     func pairWithPartner(code: String) async throws {
         isLoading = true
         defer { isLoading = false }
+
+        #if DEBUG
+        if Self.isDemo {
+            try? await Task.sleep(for: .seconds(0.6))
+            userProfile?.partnerId = "demo_partner"
+            return
+        }
+        #endif
 
         guard let myUid = Auth.auth().currentUser?.uid else {
             throw NSError(domain: "AuthService", code: -1,
@@ -568,6 +686,14 @@ class AuthService: ObservableObject {
     // MARK: - Update Avatar
 
     func updateAvatar(id: String) {
+        #if DEBUG
+        if Self.isDemo {
+            // Demo skips task negotiation and goes straight to the live tour.
+            userProfile?.avatarId = id
+            userProfile?.onboardingComplete = true
+            return
+        }
+        #endif
         guard let uid = Auth.auth().currentUser?.uid else { return }
         // Optimistic local update for snappy UI
         if var profile = userProfile {
@@ -601,10 +727,33 @@ class AuthService: ObservableObject {
         return String((0..<6).map { _ in characters.randomElement()! })
     }
 
-    /// Convert Firebase error codes to user-friendly messages
+    /// Convert Firebase error codes to user-friendly messages.
+    ///
+    /// Also logs the raw domain and code: the returned string is deliberately
+    /// vague, and without this a provider-side misconfiguration (a sign-in
+    /// method left disabled in the Firebase console, code 17006) is
+    /// indistinguishable on screen from a typo'd password.
     static func friendlyError(_ error: Error) -> String {
         let nsError = error as NSError
+        Logger.auth.error(
+            "Auth failure: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)"
+        )
         switch nsError.code {
+        case 17006:
+            // ERROR_OPERATION_NOT_ALLOWED — the provider is switched off for
+            // this Firebase project. No client change can fix it.
+            return "This sign-in method isn't enabled for DogHouse yet. Please try another way to sign in."
+        case 17012:
+            // ERROR_ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL
+            return "You already have an account with this email. Sign in the way you did the first time."
+        case 17004:
+            return "Those sign-in details weren't accepted. Please try again."
+        case 17005:
+            // ERROR_USER_DISABLED
+            return "This account has been disabled. Please contact support."
+        case 17014:
+            // ERROR_REQUIRES_RECENT_LOGIN
+            return "Please sign out and back in, then try that again."
         case 17008: return "Please enter a valid email address."
         case 17009: return "Incorrect password. Please try again."
         case 17011: return "No account found with this email."

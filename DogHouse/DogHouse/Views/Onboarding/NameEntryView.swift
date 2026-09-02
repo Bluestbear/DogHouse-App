@@ -2,13 +2,13 @@
 //  NameEntryView.swift
 //  DogHouse
 //
-//  Step 1 (conditional): ask for a display name when the sign-in provider
-//  didn't give us one.
+//  Step 1: pick a username.
 //
-//  Apple returns the user's name on the FIRST authorization only, and only if
-//  they choose to share it — with "Hide My Email" there is nothing usable at
-//  all. Email sign-up collects a name in the form, so this never appears for
-//  those accounts. Without it, a partner would see a blank name everywhere.
+//  Every sign-up path lands here — email, Apple and Google alike — so the name
+//  is asked for in exactly one place. Apple returns the user's name on the
+//  FIRST authorization only, and only if they share it; Google may or may not.
+//  When a provider does hand us a usable name we keep it and skip this screen,
+//  because re-asking for something we already have is just friction.
 //
 
 import SwiftUI
@@ -34,7 +34,7 @@ struct NameEntryView: View {
                             .font(.system(size: 44))
                             .foregroundStyle(Color.cozyOrange)
 
-                        Text("What should we call you?")
+                        Text("Pick a username")
                             .font(.dhTitle)
                             .multilineTextAlignment(.center)
 
@@ -45,9 +45,9 @@ struct NameEntryView: View {
                     }
                     .padding(.top, 60)
 
-                    TextField("Your name", text: $name)
+                    TextField("Username", text: $name)
                         .font(.dhBody)
-                        .textContentType(.givenName)
+                        .textContentType(.nickname)
                         .autocorrectionDisabled()
                         .padding()
                         .background(Color(.systemGray6))

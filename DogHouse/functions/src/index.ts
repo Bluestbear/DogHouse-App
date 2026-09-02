@@ -9,7 +9,7 @@ import {
   onDocumentUpdated,
 } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
-import { onCall, HttpsError, CallableRequest } from "firebase-functions/v2/https";
+import { onCall, onRequest, HttpsError, CallableRequest } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import * as nodemailer from "nodemailer";
 
@@ -21,6 +21,36 @@ const GRACE_RECHARGE_HOURS = 24;
 const IMMUNITY_SECONDS = 3600;
 const REDEMPTION_TREATS = 15;
 const ROSES_COST = 5;
+
+// Treat packs sold as App Store consumables, credited by revenuecatWebhook.
+// Authoritative amounts: the client only ever displays what RevenueCat's
+// Offering says the pack costs in money — how many treats it is worth is
+// decided here, so a tampered client cannot inflate a purchase.
+//
+// Sized against the catalog (cosmetics run 50–300, whole catalog is 2570) and
+// against idle earning (1–5 treats/hr by room level, so ~70–120/day at the top
+// levels). Small ≈ a mid-tier cosmetic, large ≈ 60% of the catalog — a paying
+// user still cannot buy the game out in one tap.
+const TREAT_PRODUCTS: Record<string, number> = {
+  "com.Harrison.DogHouse.treats.small": 250,
+  "com.Harrison.DogHouse.treats.medium": 900,
+  "com.Harrison.DogHouse.treats.large": 1600,
+};
+
+// Sandbox purchases credit treats like real ones — the mandatory pre-launch
+// sandbox test depends on it, and exploiting it needs both the webhook secret
+// and a sandbox Apple ID. Flip to false to accept PRODUCTION events only.
+const ALLOW_SANDBOX_PURCHASES = true;
+
+// How long a purchase idempotency key is kept. Must comfortably exceed any
+// window in which RevenueCat could re-deliver an event — their automatic
+// retry ladder is only ~155 minutes, but a human can hit "Retry" on the
+// dashboard at any time, and that replay is what must not double-credit.
+const PURCHASE_KEY_RETENTION_DAYS = 180;
+
+// Shared secret set on the RevenueCat webhook's Authorization header.
+// Set with: firebase functions:secrets:set REVENUECAT_WEBHOOK_SECRET
+const revenuecatWebhookSecret = defineSecret("REVENUECAT_WEBHOOK_SECRET");
 
 // Cosmetic prices, keyed by item id — mirrors CosmeticItem.catalog in Swift.
 // The server validates cost against this so clients can't spoof prices.
@@ -67,18 +97,28 @@ function coupleKeyOf(a: string, b: string): string {
  *
  * Keys are per-user, so one client cannot suppress another's action.
  * `cleanupIdempotencyKeys` prunes them daily.
+ *
+ * `kind` tags the key doc so the pruner can treat it differently. Callable
+ * keys are disposable after a day; purchase keys must outlive that (see
+ * PURCHASE_KEY_RETENTION_DAYS). Omitting it keeps the old behaviour.
  */
 async function once<T extends Record<string, unknown>>(
   uid: string,
   key: unknown,
-  operation: () => Promise<T>
+  operation: () => Promise<T>,
+  kind?: string
 ): Promise<T> {
   // No key (older client) — run unguarded rather than reject.
   if (typeof key !== "string" || !key) return operation();
 
   const ref = db.collection("idempotencyKeys").doc(`${uid}_${key}`);
   try {
-    await ref.create({ uid, createdAt: Timestamp.now(), status: "pending" });
+    await ref.create({
+      uid,
+      createdAt: Timestamp.now(),
+      status: "pending",
+      ...(kind ? { kind } : {}),
+    });
   } catch {
     // Key already claimed: this is a retry of a call that reached us.
     const existing = (await ref.get()).data();
@@ -88,15 +128,28 @@ async function once<T extends Record<string, unknown>>(
     throw new HttpsError("aborted", "That action is already being processed.");
   }
 
+  let result: T;
   try {
-    const result = await operation();
-    await ref.update({ status: "done", result });
-    return result;
+    result = await operation();
   } catch (err) {
-    // Let the next attempt genuinely re-run rather than replaying a failure.
+    // The operation itself threw, so nothing was committed. Release the key and
+    // let the next attempt genuinely re-run rather than replaying a failure.
     await ref.delete().catch(() => undefined);
     throw err;
   }
+
+  // Past this point the operation HAS committed, so the key must never be
+  // released — recording the result is bookkeeping and is allowed to fail.
+  // Releasing it here would let a retry apply the same spend (or, for a
+  // re-delivered purchase webhook, the same credit) a second time. A key stuck
+  // on "pending" only costs the caller an "already being processed" error; a
+  // released key costs real money.
+  try {
+    await ref.update({ status: "done", result });
+  } catch (err) {
+    logger.error("[once] Committed but failed to record result", { uid, key, err });
+  }
+  return result;
 }
 
 // Initialize at module scope and pass the app handle explicitly to each
@@ -1476,20 +1529,178 @@ export const cleanupIdempotencyKeys = onSchedule(
   { schedule: "30 3 * * *", timeZone: "Europe/Berlin", region: REGION },
   async () => {
     const cutoff = Timestamp.fromMillis(Date.now() - 24 * 3_600_000);
+    const purchaseCutoff = Timestamp.fromMillis(
+      Date.now() - PURCHASE_KEY_RETENTION_DAYS * 24 * 3_600_000);
     let deleted = 0;
+    let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
 
-    // Bounded per run so one invocation cannot blow the memory limit.
+    // Bounded per run so one invocation cannot blow the memory limit. The
+    // cursor matters: retained purchase keys are skipped rather than deleted,
+    // and without startAfter the same ones would refill every page and stall
+    // the sweep before it reached anything else.
     for (let i = 0; i < 10; i++) {
-      const snap = await db.collection("idempotencyKeys")
-        .where("createdAt", "<", cutoff).limit(500).get();
+      let q = db.collection("idempotencyKeys")
+        .where("createdAt", "<", cutoff)
+        .orderBy("createdAt")
+        .limit(500);
+      if (cursor) q = q.startAfter(cursor);
+
+      const snap = await q.get();
       if (snap.empty) break;
+      cursor = snap.docs[snap.docs.length - 1];
 
       const batch = db.batch();
-      snap.docs.forEach((d) => batch.delete(d.ref));
-      await batch.commit();
-      deleted += snap.size;
+      let batched = 0;
+      snap.docs.forEach((d) => {
+        // A purchase key is the ONLY thing stopping a re-delivered RevenueCat
+        // webhook from crediting the same transaction twice, and manual
+        // re-delivery from their dashboard has no time bound. 24h is plenty
+        // for a callable retry but far too short here — do not collapse these
+        // two cutoffs back into one.
+        if (d.get("kind") === "purchase") {
+          const created = d.get("createdAt") as Timestamp | undefined;
+          if (!created || created.toMillis() >= purchaseCutoff.toMillis()) return;
+        }
+        batch.delete(d.ref);
+        batched++;
+      });
+
+      if (batched > 0) {
+        await batch.commit();
+        deleted += batched;
+      }
       if (snap.size < 500) break;
     }
     logger.info(`[cleanupIdempotencyKeys] Deleted ${deleted} key(s)`);
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// In-app purchases: RevenueCat webhook → treats
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Resolve the Firebase uid a purchase belongs to.
+ *
+ * RevenueCat's app_user_id is set to the Firebase uid by the client
+ * (PurchaseService.login), but a purchase made before that logIn lands is
+ * attributed to a generated `$RCAnonymousID:…` instead, and RevenueCat then
+ * lists the real uid under `aliases` once the accounts merge. Anonymous ids
+ * are never a uid, so they are rejected outright rather than used to create a
+ * junk user document.
+ */
+async function resolvePurchaseUid(event: Record<string, unknown>): Promise<string | null> {
+  const aliases = Array.isArray(event.aliases) ? event.aliases : [];
+  const candidates = [event.app_user_id, ...aliases].filter(
+    (v): v is string =>
+      typeof v === "string" && v.length > 0 && !v.startsWith("$RCAnonymousID:")
+  );
+
+  for (const uid of candidates) {
+    if ((await db.collection("users").doc(uid).get()).exists) return uid;
+  }
+  return null;
+}
+
+/**
+ * Credits treats for a consumable treat-pack purchase.
+ *
+ * The phone never credits treats — it runs the StoreKit purchase and then just
+ * watches its own users/{uid} document, exactly as cosmetic purchases already
+ * work. RevenueCat verifies the receipt with Apple and calls this.
+ *
+ * Exactly-once comes from the existing once() primitive keyed on the store
+ * transaction id; see PURCHASE_KEY_RETENTION_DAYS for why those keys outlive
+ * ordinary callable keys.
+ */
+export const revenuecatWebhook = onRequest(
+  { region: REGION, secrets: [revenuecatWebhookSecret] },
+  async (req, res) => {
+    // Shared secret configured on the RevenueCat webhook. Anything else is
+    // not RevenueCat and must never reach the crediting path.
+    if (req.get("Authorization") !== revenuecatWebhookSecret.value()) {
+      logger.warn("[revenuecatWebhook] Rejected request with bad Authorization");
+      res.status(401).send("unauthorized");
+      return;
+    }
+
+    const event = req.body?.event as Record<string, unknown> | undefined;
+    if (!event) {
+      res.status(200).send("no event");
+      return;
+    }
+
+    const type = event.type;
+    if (type !== "NON_RENEWING_PURCHASE") {
+      // Consumables can also produce refunds/chargebacks. Treats may already
+      // be spent, so there is no claw-back — but log it so a support case can
+      // be traced back to a real transaction.
+      if (type === "REFUND" || type === "CANCELLATION") {
+        logger.warn("[revenuecatWebhook] Unhandled refund-shaped event", {
+          type, transactionId: event.transaction_id, productId: event.product_id,
+        });
+      }
+      res.status(200).send("ignored");
+      return;
+    }
+
+    const environment = typeof event.environment === "string" ? event.environment : "UNKNOWN";
+    if (environment === "SANDBOX" && !ALLOW_SANDBOX_PURCHASES) {
+      logger.info("[revenuecatWebhook] Ignoring SANDBOX purchase");
+      res.status(200).send("sandbox ignored");
+      return;
+    }
+
+    const productId = typeof event.product_id === "string" ? event.product_id : undefined;
+    const transactionId =
+      typeof event.transaction_id === "string" ? event.transaction_id :
+        typeof event.id === "string" ? event.id : undefined;
+    const amount = productId ? TREAT_PRODUCTS[productId] : undefined;
+
+    if (!transactionId || !amount) {
+      // An unmapped product is a configuration mistake, not a transient fault:
+      // retrying cannot fix it, so acknowledge and surface it in the logs.
+      logger.warn("[revenuecatWebhook] Nothing to credit", { productId, transactionId });
+      res.status(200).send("nothing to credit");
+      return;
+    }
+
+    const uid = await resolvePurchaseUid(event);
+    if (!uid) {
+      // A missing user never becomes present on retry — 200 rather than burn
+      // the retry ladder. Logged loudly because this is money already taken.
+      logger.error("[revenuecatWebhook] No user for purchase", {
+        appUserId: event.app_user_id, transactionId, productId,
+      });
+      res.status(200).send("no such user");
+      return;
+    }
+
+    try {
+      const result = await once(uid, `treatpack_${transactionId}`, async () => {
+        await db.runTransaction(async (tx) => {
+          const meRef = db.collection("users").doc(uid);
+          const me = await tx.get(meRef);
+          if (!me.exists) {
+            throw new Error(`user ${uid} vanished before credit`);
+          }
+          tx.update(meRef, { treats: FieldValue.increment(amount) });
+        });
+        // Doubles as the purchase record: once() persists this on the key doc,
+        // which is now retained for PURCHASE_KEY_RETENTION_DAYS.
+        return { credited: amount, productId, environment };
+      }, "purchase");
+
+      logger.info("[revenuecatWebhook] Credited treats", {
+        uid, transactionId, productId, environment, credited: result.credited,
+      });
+      res.status(200).send("ok");
+    } catch (e) {
+      // once() throws "aborted" while a concurrent delivery of the same
+      // transaction is still in flight. 500 lets RevenueCat retry, by which
+      // point the first attempt has finished and its stored result replays.
+      logger.error("[revenuecatWebhook] Credit failed", { uid, transactionId, error: e });
+      res.status(500).send("error");
+    }
   }
 );

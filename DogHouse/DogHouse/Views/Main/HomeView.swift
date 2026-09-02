@@ -28,6 +28,9 @@ struct HomeView: View {
     @StateObject private var doghouseService = DoghouseService(userId: "mock_user", partnerId: "mock_partner")
     @StateObject private var notificationService = NotificationService.shared
     @ObservedObject var challengeService: ChallengeService
+    /// The live tour drives the scene page and scroll position so the
+    /// control it is pointing at is actually on screen.
+    @ObservedObject private var tour = TourCoordinator.shared
 
     @State private var showSendSheet = false
     @State private var activeGameSheet: GameSheet?
@@ -140,6 +143,7 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 20) {
                     // Notifications disabled — the app can't work without them
@@ -188,6 +192,25 @@ struct HomeView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 32)
             }
+            // Bring the tour's target into view before the spotlight lands.
+            .onChange(of: tour.currentStep) { _, step in
+                guard let step else { return }
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    if let page = step.scenePage {
+                        scenePageIndex = page
+                    }
+                    switch step {
+                    case .sendButton:
+                        proxy.scrollTo("tour-send", anchor: .bottom)
+                    case .treats:
+                        proxy.scrollTo("tour-progress", anchor: .center)
+                    case .welcome, .myRoom, .partnerRoom, .roses, .tasks, .games, .widgets:
+                        proxy.scrollTo("tour-scene", anchor: .top)
+                    default:
+                        break
+                    }
+                }
+            }
             .navigationTitle("DogHouse")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -196,6 +219,7 @@ struct HomeView: View {
                     } label: {
                         Label("Your Tasks", systemImage: "list.clipboard")
                     }
+                    .tourAnchor(.tasksButton)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -219,6 +243,7 @@ struct HomeView: View {
                     } label: {
                         Label("Games", systemImage: "plus.circle")
                     }
+                    .tourAnchor(.gamesMenu)
                 }
             }
             .sheet(isPresented: $showTasksSheet) {
@@ -319,6 +344,7 @@ struct HomeView: View {
             .onChange(of: doghouseService.partnerIsInDoghouse) { writeWidgetState() }
             .onChange(of: authService.userProfile?.avatarId) { writeWidgetState() }
             .onChange(of: authService.partnerProfile?.avatarId) { writeWidgetState() }
+            } // ScrollViewReader
         }
         .errorBanner($errorMessage)
         .sheet(isPresented: $showSendSheet) {
@@ -394,6 +420,8 @@ struct HomeView: View {
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .frame(height: 320)
+        .tourAnchor(.sceneWindow)
+        .id("tour-scene")
 
         // Page indicator: name labels flanking the dots
         HStack(spacing: 8) {
@@ -490,6 +518,7 @@ struct HomeView: View {
         }
         .overlay(alignment: .topTrailing) {
             sendRosesButton
+                .tourAnchor(.rosesButton)
                 .padding(.trailing, 32)
                 .padding(.top, 16)
         }
@@ -552,6 +581,8 @@ struct HomeView: View {
             level: currentRoomLevel,
             timeSinceRelease: timeSinceMyRelease
         )
+        .tourAnchor(.roomProgress)
+        .id("tour-progress")
 
         if let myHomeStart {
             TimeAtHomeCard(start: myHomeStart, elapsed: timeSinceMyRelease)
@@ -651,6 +682,8 @@ struct HomeView: View {
             hasGraceCharges: myGraceCharges > 0,
             onTap: { showSendSheet = true }
         )
+        .tourAnchor(.sendButton)
+        .id("tour-send")
     }
 
     /// Let the partner out. Confirming a redemption claim also rewards treats,
