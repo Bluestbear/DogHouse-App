@@ -175,14 +175,23 @@ struct WelcomeView: View {
         // The mascot peeks over the top edge, nosy about what's being typed.
         // Drawn as the card's background so the card hides its lower half.
         .background(alignment: .top) {
-            PeekingDogHead(lookingDown: focusedField != nil)
-                .offset(y: -122)
+            // The real avatar, big, with its body behind the card: only the
+            // head, ears and the tip of the tail show above the edge.
+            AvatarView(
+                avatar: DogAvatar.avatar(for: "dog_1"),
+                mood: .happy,
+                size: 270,
+                gaze: focusedField != nil ? 3 : 0
+            )
+            .rotationEffect(.degrees(-4))
+            .offset(y: -165)
+            .accessibilityHidden(true)
         }
         .overlay(alignment: .top) {
             PeekingPaws()
-                .offset(y: -8)
+                .offset(y: -12)
         }
-        .padding(.top, 118)
+        .padding(.top, 150)
         .animation(.easeInOut(duration: 0.2), value: mode)
     }
 
@@ -254,90 +263,21 @@ struct WelcomeView: View {
 
 // MARK: - Triangle Shape
 
-// MARK: - Peeking Mascot
+// MARK: - Peeking Paws
 
-/// The Golden dog's face, drawn the way the app icon draws it, resting its
-/// chin on the top edge of the sign-in card.
-struct PeekingDogHead: View {
-    var lookingDown: Bool
-
-    private let fur = Color(red: 0.82, green: 0.63, blue: 0.25)
-    private let furDark = Color(red: 0.68, green: 0.50, blue: 0.16)
-    private let muzzle = Color(red: 0.95, green: 0.84, blue: 0.60)
-    private let dark = Color(red: 0.12, green: 0.08, blue: 0.08)
-
-    @State private var isBlinking = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        ZStack {
-            // Ears
-            Ellipse().fill(furDark).frame(width: 46, height: 60)
-                .rotationEffect(.degrees(-18)).offset(x: -64, y: -36)
-            Ellipse().fill(furDark).frame(width: 46, height: 60)
-                .rotationEffect(.degrees(18)).offset(x: 64, y: -36)
-
-            Circle().fill(fur).frame(width: 156, height: 156)
-
-            Ellipse().fill(muzzle).frame(width: 96, height: 70).offset(y: 36)
-
-            ForEach([-31, 31], id: \.self) { x in
-                ZStack {
-                    Circle().fill(.white).frame(width: 42, height: 42)
-                    Circle().fill(dark).frame(width: 24, height: 24)
-                        .offset(y: lookingDown ? 7 : 1)
-                    Circle().fill(.white).frame(width: 9, height: 9)
-                        .offset(x: 6, y: lookingDown ? 1 : -6)
-                }
-                .scaleEffect(y: isBlinking ? 0.08 : 1, anchor: .center)
-                .offset(x: CGFloat(x), y: -6)
-                .animation(.easeInOut(duration: 0.25), value: lookingDown)
-            }
-
-            Ellipse().fill(dark).frame(width: 32, height: 22).offset(y: 22)
-            Ellipse().fill(Color(red: 0.29, green: 0.21, blue: 0.21)).frame(width: 9, height: 5).offset(x: -6, y: 17)
-
-            Path { p in
-                p.move(to: CGPoint(x: 0, y: 0))
-                p.addQuadCurve(to: CGPoint(x: 40, y: 0), control: CGPoint(x: 20, y: 22))
-            }
-            .stroke(dark, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
-            .frame(width: 40, height: 14)
-            .offset(y: 46)
-        }
-        .frame(width: 200, height: 170)
-        .rotationEffect(.degrees(-5))
-        .accessibilityHidden(true)
-        .task(id: reduceMotion) {
-            guard !reduceMotion else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(Double.random(in: 2.5...5.5)))
-                withAnimation(.easeIn(duration: 0.07)) { isBlinking = true }
-                try? await Task.sleep(for: .seconds(0.1))
-                withAnimation(.easeOut(duration: 0.11)) { isBlinking = false }
-            }
-        }
-    }
-}
-
-/// Two paws hooked over the card's edge, so the dog is clearly hanging on
-/// to look, not floating behind it.
+/// The avatar's paws, hooked over the card's edge, drawn the way AvatarView
+/// draws them (a 14×9 rounded rect at the avatar's scale) so they match the
+/// head above.
 struct PeekingPaws: View {
-    private let fur = Color(red: 0.82, green: 0.63, blue: 0.25)
-    private let line = Color(red: 0.62, green: 0.45, blue: 0.16)
+    private let fur = DogAvatar.avatar(for: "dog_1").primaryColor
+    private let scale: CGFloat = 270 / 80
 
     var body: some View {
-        HStack(spacing: 58) {
+        HStack(spacing: 13 * scale) {
             ForEach(0..<2, id: \.self) { _ in
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10).fill(fur).frame(width: 36, height: 22)
-                    HStack(spacing: 7) {
-                        ForEach(0..<3, id: \.self) { _ in
-                            Capsule().fill(line.opacity(0.6)).frame(width: 2, height: 9)
-                        }
-                    }
-                    .offset(y: 3)
-                }
+                RoundedRectangle(cornerRadius: 5 * scale)
+                    .fill(fur)
+                    .frame(width: 14 * scale, height: 9 * scale)
             }
         }
         .accessibilityHidden(true)

@@ -14,6 +14,10 @@ struct AvatarView: View {
     /// of timers don't run at once.
     var blinks: Bool = true
 
+    /// Where the pupils look, in the avatar's own 80-unit space. Positive
+    /// looks down. The Welcome mascot uses it to watch the field being typed.
+    var gaze: CGFloat = 0
+
     @State private var isBlinking = false
     @State private var wag = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -170,7 +174,8 @@ struct AvatarView: View {
             Circle()
                 .fill(Color(red: 0.12, green: 0.08, blue: 0.08))
                 .frame(width: eyePupilSize, height: eyePupilSize)
-                .offset(y: eyeOffset)
+                .offset(y: eyeOffset + gaze * scale)
+                .animation(.easeInOut(duration: 0.25), value: gaze)
 
             // Shine highlight
             Circle()
