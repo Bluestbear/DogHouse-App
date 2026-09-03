@@ -274,8 +274,13 @@ struct DoghouseScene: View {
 
             door.offset(y: 37)
 
-            // The dog, with everything that happens to it
-            dog.offset(y: 30)
+            // The dog, with everything that happens to it. The offset seats
+            // its paws on the ground rather than in mid-air: the house group
+            // is centred 30pt below the scene centre, the avatar's paws sit
+            // ~24pt below its own centre, and the ground's top edge is 102pt
+            // below the group centre — so 102 - 24 ≈ 48 puts the feet on it,
+            // level with the bottom of the doorway.
+            dog.offset(y: 48)
 
             nameplate.offset(y: -14)
 
