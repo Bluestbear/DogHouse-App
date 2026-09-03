@@ -14,6 +14,10 @@ struct AvatarView: View {
     /// of timers don't run at once.
     var blinks: Bool = true
 
+    /// Set false where the tail would stick out of a crop — the Welcome
+    /// mascot shows only the head above the sign-in card.
+    var showsTail: Bool = true
+
     /// Where the pupils look, in the avatar's own 80-unit space. Positive
     /// looks down. The Welcome mascot uses it to watch the field being typed.
     var gaze: CGFloat = 0
@@ -32,7 +36,7 @@ struct AvatarView: View {
 
     var body: some View {
         ZStack {
-            tailView
+            if showsTail { tailView }
 
             // Ears sit behind head
             earView(isLeft: true)

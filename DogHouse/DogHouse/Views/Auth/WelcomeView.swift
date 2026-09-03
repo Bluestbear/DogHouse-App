@@ -55,17 +55,11 @@ struct WelcomeView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(spacing: 10) {
-            Text("DogHouse")
-                .font(.dhDisplay)
-                .foregroundStyle(.white)
-
-            Text("Messed up? You're in the DogHouse.")
-                .font(.dhBody)
-                .foregroundStyle(.white.opacity(0.9))
-                .multilineTextAlignment(.center)
-        }
-        .padding(.top, 56)
+        Text("Welcome to DogHouse!")
+            .font(.dhDisplay)
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.center)
+            .padding(.top, 56)
     }
 
     // MARK: - Form card
@@ -176,11 +170,14 @@ struct WelcomeView: View {
         // Drawn as the card's background so the card hides its lower half.
         .background(alignment: .top) {
             // The real avatar, big, with its body behind the card: only the
-            // head, ears and the tip of the tail show above the edge.
+            // head and ears show above the edge. The tail is switched off
+            // rather than clipped — it overlaps the head and the ears in
+            // both axes, so any mask that hid it would clip them too.
             AvatarView(
                 avatar: DogAvatar.avatar(for: "dog_1"),
                 mood: .happy,
                 size: 270,
+                showsTail: false,
                 gaze: focusedField != nil ? 3 : 0
             )
             .rotationEffect(.degrees(-4))
