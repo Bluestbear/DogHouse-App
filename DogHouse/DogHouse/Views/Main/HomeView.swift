@@ -27,6 +27,7 @@ struct HomeView: View {
     @EnvironmentObject var authService: AuthService
     @StateObject private var doghouseService = DoghouseService(userId: "mock_user", partnerId: "mock_partner")
     @StateObject private var notificationService = NotificationService.shared
+    @StateObject private var achievements = AchievementService()
     @ObservedObject var challengeService: ChallengeService
     /// The live tour drives the scene page and scroll position so the
     /// control it is pointing at is actually on screen.
@@ -47,6 +48,9 @@ struct HomeView: View {
     @State private var showReleaseAnimation = false
     @State private var errorMessage: String?
     @State private var showTasksSheet = false
+    @State private var showAchievementsSheet = false
+    @State private var showAchievementToast = false
+    @State private var unlockedAchievement: Achievement?
     @State private var coupleTasks: [CoupleTask] = []
     @State private var coupleTasksLoaded = false
     @State private var scenePageIndex = 0
@@ -148,6 +152,8 @@ struct HomeView: View {
             ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 20) {
+                    greetingHeader
+
                     // Notifications disabled — the app can't work without them
                     if notificationService.authStatus == .denied {
                         NotificationsDeniedBanner {
@@ -181,19 +187,27 @@ struct HomeView: View {
                         )
                     }
 
-                    // ==========================================
-                    // TOP SECTION: My own dog's status
-                    // ==========================================
-                    myStatusSection
+                    // The swipeable window: page 0 is my dog, page 1 is
+                    // my partner's.
+                    sceneSection
 
-                    // ==========================================
-                    // BOTTOM SECTION: Partner controls
-                    // ==========================================
-                    partnerControlsSection
+                    // Whichever dog you are looking at, that is whose
+                    // controls you get. Swiping to your partner drops your
+                    // own timer and reason, and the send button and grace
+                    // meter take their place directly under the window.
+                    VStack(spacing: 20) {
+                        if scenePageIndex == 0 {
+                            myStatusDetail
+                        } else {
+                            partnerControlsSection
+                        }
+                    }
+                    .animation(.spring(duration: 0.35), value: scenePageIndex)
                 }
                 .padding(.top, 16)
                 .padding(.bottom, 32)
             }
+            .dhPageBackground()
             // Bring the tour's target into view before the spotlight lands.
             .onChange(of: tour.currentStep) { _, step in
                 guard let step else { return }
@@ -213,7 +227,9 @@ struct HomeView: View {
                     }
                 }
             }
-            .navigationTitle("DogHouse")
+            // The greeting header stands in for the title.
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -247,10 +263,20 @@ struct HomeView: View {
                     }
                     .tourAnchor(.gamesMenu)
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showAchievementsSheet = true
+                    } label: {
+                        Label("Achievements", systemImage: "trophy")
+                    }
+                }
             }
             .sheet(isPresented: $showTasksSheet) {
                 TasksSheetView()
                     .environmentObject(authService)
+            }
+            .sheet(isPresented: $showAchievementsSheet) {
+                AchievementsSheet(achievements: achievements, snapshot: achievementSnapshot)
             }
             .sheet(item: $activeGameSheet) { sheet in
                 switch sheet {
@@ -272,6 +298,7 @@ struct HomeView: View {
                     currentDate = Date()
                     checkForLevelUp()
                     maybeAwardTreats()
+                    evaluateAchievements()
                     try? await Task.sleep(for: .seconds(60))
                 }
             }
@@ -283,6 +310,7 @@ struct HomeView: View {
                 currentDate = Date()
                 checkForLevelUp()
                 maybeAwardTreats()
+                evaluateAchievements()
             }
             .animation(.spring(duration: 0.5), value: doghouseService.myDoghouseEvent?.id)
             .animation(.spring(duration: 0.5), value: doghouseService.partnerDoghouseEvent?.id)
@@ -298,6 +326,10 @@ struct HomeView: View {
                     }
                     if showLevelUpToast {
                         levelUpToast
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    if showAchievementToast, let unlockedAchievement {
+                        achievementToast(unlockedAchievement)
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
@@ -350,6 +382,30 @@ struct HomeView: View {
             } // ScrollViewReader
         }
         .errorBanner($errorMessage)
+        // Badges are judged whenever the inputs move: pairing known,
+        // a stay ends, a quiz resolves, counters tick.
+        .onChange(of: authService.userProfile?.partnerId, initial: true) { _, _ in
+            if let userId = authService.userProfile?.id {
+                achievements.configure(userId: userId, partnerId: authService.userProfile?.partnerId)
+            }
+            evaluateAchievements()
+        }
+        .onChange(of: doghouseService.doghouseHistory.count) { evaluateAchievements() }
+        .onChange(of: doghouseService.myDoghouseEvent?.id) { evaluateAchievements() }
+        .onChange(of: doghouseService.partnerDoghouseEvent?.id) { evaluateAchievements() }
+        .onChange(of: challengeService.challenges.count) { evaluateAchievements() }
+        .onChange(of: achievements.counters) { evaluateAchievements() }
+        .onChange(of: achievements.justUnlocked?.id) { _, id in
+            guard id != nil, let unlocked = achievements.justUnlocked else { return }
+            unlockedAchievement = unlocked
+            achievements.justUnlocked = nil
+            HapticService.shared.success()
+            withAnimation(.spring(duration: 0.4)) { showAchievementToast = true }
+            Task {
+                try? await Task.sleep(for: .seconds(4))
+                withAnimation { showAchievementToast = false }
+            }
+        }
         .sheet(isPresented: $showSendSheet) {
             SendToDoghouseSheet(doghouseService: doghouseService, partnerName: partnerName, onSent: {
                 showSendAnimation = true
@@ -410,11 +466,11 @@ struct HomeView: View {
     }
 
     // MARK: - My Status Section (TOP)
-    // Swipeable scene window: page 0 = my placement, page 1 = partner's placement.
-    // The info card below always reflects my own status.
+    // Swipeable scene window: page 0 = my placement, page 1 = partner's
+    // placement. What sits below it follows the page.
 
     @ViewBuilder
-    private var myStatusSection: some View {
+    private var sceneSection: some View {
         TabView(selection: $scenePageIndex) {
             mySceneView
                 .tag(0)
@@ -446,8 +502,12 @@ struct HomeView: View {
             Spacer()
         }
         .animation(.easeInOut(duration: 0.2), value: scenePageIndex)
+    }
 
-        // Info card — always shows my own status data
+    // MARK: My Status (page 0) — my stay, or my room while I'm home
+
+    @ViewBuilder
+    private var myStatusDetail: some View {
         if let myEvent = doghouseService.myDoghouseEvent {
             MyDoghouseInfoCard(
                 event: myEvent,
@@ -564,6 +624,7 @@ struct HomeView: View {
             defer { isSendingRoses = false }
             do {
                 try await doghouseService.sendRoses()
+                achievements.record(.roses)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -574,7 +635,9 @@ struct HomeView: View {
         HapticService.shared.success()
         Task {
             let name = authService.userProfile?.displayName ?? "Partner"
-            try? await doghouseService.sendBellyRub(fromDisplayName: name)
+            if (try? await doghouseService.sendBellyRub(fromDisplayName: name)) != nil {
+                achievements.record(.bellyRubs)
+            }
         }
     }
 
@@ -644,8 +707,6 @@ struct HomeView: View {
 
     @ViewBuilder
     private var partnerControlsSection: some View {
-        PartnerSectionDivider(partnerName: partnerName)
-
         if let partnerEvent = doghouseService.partnerDoghouseEvent {
             // I sent my partner to the doghouse — show their status + release button
             PartnerInDoghouseCard(
@@ -704,6 +765,110 @@ struct HomeView: View {
                 SoundService.shared.playRelease()
             } catch {
                 errorMessage = "Failed to release: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: - Greeting
+
+    private var myFirstName: String {
+        Self.firstName(of: authService.userProfile?.displayName, fallback: "there")
+    }
+
+    private var partnerFirstName: String {
+        Self.firstName(of: authService.partnerProfile?.displayName, fallback: "Your partner")
+    }
+
+    private static func firstName(of displayName: String?, fallback: String) -> String {
+        let first = (displayName ?? "").split(separator: " ").first.map(String.init) ?? ""
+        return first.isEmpty ? fallback : first
+    }
+
+    /// "Good morning" / "Good afternoon" / "Good evening", "Hey" overnight.
+    static func salutation(at date: Date, calendar: Calendar = .current) -> String {
+        switch calendar.component(.hour, from: date) {
+        case 5..<12: "Good morning"
+        case 12..<17: "Good afternoon"
+        case 17..<22: "Good evening"
+        default: "Hey"
+        }
+    }
+
+    /// Whose status the greeting describes, and what it says. Page 1 of the
+    /// scene window is the partner's, so swiping there swaps the line —
+    /// otherwise you'd be looking at their room under a status about you.
+    private var sceneStatus: (text: String, inDoghouse: Bool) {
+        if scenePageIndex == 1 {
+            let inDoghouse = doghouseService.partnerDoghouseEvent != nil
+            return (inDoghouse
+                    ? "\(partnerFirstName) is in the doghouse"
+                    : "\(partnerFirstName) is doing good", inDoghouse)
+        }
+        let inDoghouse = doghouseService.myDoghouseEvent != nil
+        return (inDoghouse ? "You're in the doghouse" : "You're doing good", inDoghouse)
+    }
+
+    private var greetingHeader: some View {
+        let status = sceneStatus
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("\(Self.salutation(at: currentDate)), \(myFirstName)")
+                .font(.dhLargeTitle)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(status.text)
+                .font(.dhBodyBold)
+                .foregroundStyle(status.inDoghouse ? Color.red : Color.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.2), value: status.text)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Same gutter as the scene card and the cards below it.
+        .padding(.horizontal, 20)
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: - Achievements
+
+    /// The couple's current standing, from the services Home already holds.
+    private var achievementSnapshot: AchievementSnapshot? {
+        guard let me = authService.userProfile,
+              let partnerId = me.partnerId, partnerId != "skipped" else { return nil }
+        let partner = authService.partnerProfile
+        let active = [doghouseService.myDoghouseEvent, doghouseService.partnerDoghouseEvent].compactMap { $0 }
+        let bothHome = active.isEmpty ? min(timeSinceMyRelease, partnerTimeSinceRelease) : 0
+        return AchievementSnapshot(
+            userId: me.id,
+            partnerId: partnerId,
+            events: doghouseService.doghouseHistory + active,
+            now: currentDate,
+            bothHomeFor: bothHome,
+            myLevel: currentRoomLevel,
+            partnerLevel: partnerRoomLevel,
+            challenges: challengeService.challenges,
+            maxWishCards: max(me.wishCards ?? 0, partner?.wishCards ?? 0),
+            dressedCount: [me, partner].compactMap { $0 }.filter { !($0.equippedItemIds ?? [:]).isEmpty }.count,
+            maxTreats: max(me.effectiveTreats, partner?.effectiveTreats ?? 0),
+            friendCount: me.friendIds.count,
+            counters: achievements.counters
+        )
+    }
+
+    private func evaluateAchievements() {
+        guard let snapshot = achievementSnapshot else { return }
+        achievements.evaluate(snapshot)
+    }
+
+    private func achievementToast(_ achievement: Achievement) -> some View {
+        HomeToast {
+            Text(achievement.emoji)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Achievement unlocked")
+                    .font(.dhBadge)
+                    .foregroundStyle(.secondary)
+                Text(achievement.title)
+                    .font(.dhCaptionBold)
             }
         }
     }

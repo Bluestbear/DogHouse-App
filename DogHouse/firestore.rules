@@ -117,11 +117,15 @@ service cloud.firestore {
     match /voteEvents/{voteId} {
       allow read: if authed()
         && request.auth.uid in resource.data.get('audienceIds', []);
+      // The vote must name one of the dogs in this vote. Without that check
+      // anyone in the audience could vote for themselves (or their partner)
+      // and, on winning, be "released" with an hour of immunity.
       allow update: if authed()
         && resource.data.status == 'active'
         && request.auth.uid in resource.data.get('audienceIds', [])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes'])
-        && request.resource.data.get('votes', {}).diff(resource.data.get('votes', {})).affectedKeys().hasOnly([request.auth.uid]);
+        && request.resource.data.get('votes', {}).diff(resource.data.get('votes', {})).affectedKeys().hasOnly([request.auth.uid])
+        && request.resource.data.votes[request.auth.uid] in resource.data.get('doghousedUserIds', []);
     }
 
     // Public sendings. Readable by the audience. Creation and release are
@@ -176,6 +180,14 @@ service cloud.firestore {
     // uids form the coupleKey can access it.
     match /coupleMeta/{coupleKey} {
       allow read, write: if authed() && isMyCoupleKey(coupleKey);
+    }
+
+    // Couple achievements — unlocked badges and the roses / belly-rub
+    // counters. Nothing economic lives here, so the partners write it
+    // directly. Path-based like its neighbours: the listener attaches before
+    // the first badge exists.
+    match /achievements/{coupleKey} {
+      allow read, create, update: if authed() && isMyCoupleKey(coupleKey);
     }
 
     // Couple challenges (quiz / photo dash / anniversary race).

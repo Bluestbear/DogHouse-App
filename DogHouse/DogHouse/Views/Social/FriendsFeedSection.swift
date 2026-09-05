@@ -96,6 +96,15 @@ struct JointVoteLoaderView: View {
 struct FeedPostCard: View {
     let post: FeedPost
     @ObservedObject var feedService: FeedService
+    /// Ids of the votes currently running. A post keeps its `voteEventId`
+    /// after the vote settles (the losing dog stays in), so the badge must
+    /// check the vote, not the post.
+    var activeVoteIds: Set<String> = []
+
+    private var isInActiveVote: Bool {
+        guard post.isActive, let voteId = post.voteEventId else { return false }
+        return activeVoteIds.contains(voteId)
+    }
 
     private var myReaction: FeedReaction? {
         post.reaction(of: feedService.userId)
@@ -146,7 +155,7 @@ struct FeedPostCard: View {
                 reactionButton(.dog, count: post.dogCount, label: "Free the dog")
                 roastMenu
                 Spacer()
-                if post.voteEventId != nil && post.isActive {
+                if isInActiveVote {
                     Label("In a vote", systemImage: "hand.raised.fill")
                         .font(.caption2.bold())
                         .foregroundStyle(Color.cozyOrange)

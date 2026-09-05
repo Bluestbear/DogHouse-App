@@ -89,7 +89,10 @@ enum TourStep: Int, CaseIterable, Sendable {
     var scenePage: Int? {
         switch self {
         case .myRoom, .treats: return 0
-        case .partnerRoom, .roses: return 1
+        // The send button and the roses puck only exist on the partner's
+        // page — spotlighting them without flipping there would point at
+        // nothing.
+        case .partnerRoom, .roses, .sendButton: return 1
         default: return nil
         }
     }

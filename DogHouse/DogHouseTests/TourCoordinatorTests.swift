@@ -93,8 +93,23 @@ struct TourCoordinatorTests {
     func scenePages() {
         #expect(TourStep.partnerRoom.scenePage == 1)
         #expect(TourStep.roses.scenePage == 1)
+        // The send button lives under the partner's page, so its step has to
+        // flip there too or the spotlight lands on nothing.
+        #expect(TourStep.sendButton.scenePage == 1)
         #expect(TourStep.myRoom.scenePage == 0)
+        #expect(TourStep.treats.scenePage == 0)
         #expect(TourStep.shop.scenePage == nil)
+    }
+
+    @Test("Every step that spotlights a page-specific control names its page")
+    func pageSpecificAnchorsSetAPage() {
+        // These anchors only exist on one page of the scene window; a step
+        // pointing at one without a scenePage would spotlight empty space.
+        let pageSpecific: Set<TourAnchorID> = [.rosesButton, .sendButton, .roomProgress]
+        for step in TourStep.allCases {
+            guard let anchor = step.anchor, pageSpecific.contains(anchor) else { continue }
+            #expect(step.scenePage != nil, "\(step) spotlights \(anchor) but sets no scene page")
+        }
     }
 
     @Test("Copy fills in the couple's real names")

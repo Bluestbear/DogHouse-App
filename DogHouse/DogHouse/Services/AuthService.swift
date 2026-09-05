@@ -56,6 +56,7 @@ class AuthService: ObservableObject {
 
     /// Launch the app with the `-demoOnboarding` argument to walk the
     /// onboarding screens and the live tour with fake data and no account.
+    /// Add `-demoHome` to skip straight to Home in the all-clear state.
     /// No auth listener is attached and the profile mutations below are
     /// applied locally, so nothing reaches Firebase. Task negotiation is
     /// skipped (it needs a real second partner).
@@ -68,6 +69,7 @@ class AuthService: ObservableObject {
         // A demo doghouse stint skips straight to Home: the point of it is the
         // scene, not the onboarding, and the tour would sit on top of it.
         let straightToHome = DoghouseService.demoDoghouseHours != nil
+            || ProcessInfo.processInfo.arguments.contains("-demoHome")
         userProfile = UserProfile(
             id: "demo_me", displayName: straightToHome ? "Harrison" : "", avatarId: straightToHome ? "dog_1" : nil,
             partnerCode: nil, partnerId: straightToHome ? "demo_partner" : nil, immunityUntil: nil,

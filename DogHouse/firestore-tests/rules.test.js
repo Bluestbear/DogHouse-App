@@ -226,6 +226,23 @@ describe("coupleTasks / coupleMeta", () => {
   });
 });
 
+describe("achievements", () => {
+  test("a partner can unlock a badge and bump a counter", async () => {
+    await assertSucceeds(setDoc(doc(as(ALICE), "achievements", COUPLE_KEY),
+      { unlocked: { firstOffence: new Date() }, counters: { roses: 1 } }, { merge: true }));
+  });
+
+  test("the other partner reads it", async () => {
+    await assertSucceeds(getDoc(doc(as(BOB), "achievements", COUPLE_KEY)));
+  });
+
+  test("a stranger can neither read nor forge the couple's badges", async () => {
+    await assertFails(getDoc(doc(as(MALLORY), "achievements", COUPLE_KEY)));
+    await assertFails(setDoc(doc(as(MALLORY), "achievements", COUPLE_KEY),
+      { unlocked: { dogPalace: new Date() } }, { merge: true }));
+  });
+});
+
 // ───────────────────────── onboarding tasks ─────────────────────────
 
 describe("onboardingTasks", () => {
@@ -346,6 +363,97 @@ describe("feedPosts", () => {
   test("clients cannot create feed posts directly", async () => {
     await assertFails(setDoc(doc(as(ALICE), "feedPosts", "forged"), {
       senderId: ALICE, receiverId: BOB, audienceIds: [ALICE],
+    }));
+  });
+});
+
+// ───────────────────────── jailbreak votes ─────────────────────────
+
+describe("voteEvents", () => {
+  const CAROL = "uidCarol"; // the other couple's dog, in the doghouse too
+  const OUTSIDER = "uidEve";
+
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      // Written by onFeedPostCreated (admin). BOB and CAROL are the dogs;
+      // ALICE, MALLORY and CAROL's couple make up the audience.
+      await setDoc(doc(db, "voteEvents", "vote1"), {
+        type: "joint_doghouse", status: "active",
+        doghousedUserIds: [BOB, CAROL],
+        audienceIds: [ALICE, BOB, MALLORY, CAROL],
+        votes: {}, startedAt: new Date(), endsAt: new Date(Date.now() + 1800_000),
+      });
+      await setDoc(doc(db, "voteEvents", "vote2"), {
+        type: "joint_doghouse", status: "completed",
+        doghousedUserIds: [BOB, CAROL], audienceIds: [ALICE, BOB, MALLORY, CAROL],
+        votes: {}, startedAt: new Date(), endsAt: new Date(),
+      });
+    });
+  });
+
+  test("an audience member can run the exact query VoteService listens with", async () => {
+    const q = query(
+      collection(as(MALLORY), "voteEvents"),
+      where("audienceIds", "array-contains", MALLORY),
+      where("status", "==", "active")
+    );
+    await assertSucceeds(getDocs(q));
+  });
+
+  test("an outsider cannot read the vote, even with the same query shape", async () => {
+    await assertFails(getDoc(doc(as(OUTSIDER), "voteEvents", "vote1")));
+    const q = query(
+      collection(as(OUTSIDER), "voteEvents"),
+      where("audienceIds", "array-contains", MALLORY),
+      where("status", "==", "active")
+    );
+    await assertFails(getDocs(q));
+  });
+
+  test("an audience member may vote for one of the dogs", async () => {
+    await assertSucceeds(updateDoc(doc(as(MALLORY), "voteEvents", "vote1"),
+      { [`votes.${MALLORY}`]: CAROL }));
+  });
+
+  test("a dog may vote in their own jailbreak", async () => {
+    await assertSucceeds(updateDoc(doc(as(BOB), "voteEvents", "vote1"),
+      { [`votes.${BOB}`]: BOB }));
+  });
+
+  test("a vote must name a dog in THIS vote — no voting yourself free", async () => {
+    await assertFails(updateDoc(doc(as(MALLORY), "voteEvents", "vote1"),
+      { [`votes.${MALLORY}`]: MALLORY }));
+    await assertFails(updateDoc(doc(as(ALICE), "voteEvents", "vote1"),
+      { [`votes.${ALICE}`]: ALICE }));
+  });
+
+  test("nobody can vote on someone else's behalf", async () => {
+    await assertFails(updateDoc(doc(as(MALLORY), "voteEvents", "vote1"),
+      { [`votes.${ALICE}`]: CAROL }));
+  });
+
+  test("an outsider cannot vote", async () => {
+    await assertFails(updateDoc(doc(as(OUTSIDER), "voteEvents", "vote1"),
+      { [`votes.${OUTSIDER}`]: CAROL }));
+  });
+
+  test("clients cannot settle the vote themselves", async () => {
+    await assertFails(updateDoc(doc(as(ALICE), "voteEvents", "vote1"),
+      { status: "completed", winnerId: BOB }));
+    await assertFails(updateDoc(doc(as(ALICE), "voteEvents", "vote1"),
+      { endsAt: new Date() }));
+  });
+
+  test("no votes once the vote has closed", async () => {
+    await assertFails(updateDoc(doc(as(MALLORY), "voteEvents", "vote2"),
+      { [`votes.${MALLORY}`]: CAROL }));
+  });
+
+  test("clients cannot start a vote", async () => {
+    await assertFails(setDoc(doc(as(ALICE), "voteEvents", "forged"), {
+      type: "joint_doghouse", status: "active", doghousedUserIds: [BOB],
+      audienceIds: [ALICE], votes: {},
     }));
   });
 });

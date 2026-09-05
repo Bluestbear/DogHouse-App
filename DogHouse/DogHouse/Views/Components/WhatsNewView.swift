@@ -82,6 +82,7 @@ struct WhatsNewView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 24)
             }
+            .dhPageBackground()
             .safeAreaInset(edge: .bottom) {
                 Button {
                     dismiss()

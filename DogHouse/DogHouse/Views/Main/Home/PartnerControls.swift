@@ -214,32 +214,9 @@ struct SendToDoghouseButton: View {
     }
 }
 
-// MARK: - Section Divider
-
-/// The hairline-and-name rule separating my half of Home from my partner's.
-struct PartnerSectionDivider: View {
-    let partnerName: String
-
-    var body: some View {
-        HStack {
-            Rectangle()
-                .fill(Color(.systemGray4))
-                .frame(height: 1)
-            Text(partnerName)
-                .font(.dhCaptionBold)
-                .foregroundStyle(.secondary)
-            Rectangle()
-                .fill(Color(.systemGray4))
-                .frame(height: 1)
-        }
-        .padding(.horizontal, 24)
-    }
-}
-
 #Preview {
     ScrollView {
         VStack(spacing: 20) {
-            PartnerSectionDivider(partnerName: "Sam")
             PartnerImmunityBanner(
                 partnerName: "Sam",
                 immunityEnd: Date().addingTimeInterval(2_400),

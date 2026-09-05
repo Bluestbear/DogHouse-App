@@ -55,6 +55,7 @@ struct FriendsTabView: View {
                 couplesSection
             }
             .navigationTitle("Friends")
+            .dhPageBackground()
             // AuthService is the live source of the pairing; FriendService used to
             // resolve it once at construction and could never recover if it was
             // unavailable at that instant.
@@ -96,7 +97,11 @@ struct FriendsTabView: View {
     private var feedSection: some View {
         Section {
             ForEach(feedService.posts) { post in
-                FeedPostCard(post: post, feedService: feedService)
+                FeedPostCard(
+                    post: post,
+                    feedService: feedService,
+                    activeVoteIds: Set(voteService.activeVoteEvents.map(\.id))
+                )
             }
         } header: {
             Text("The Feed 📣")

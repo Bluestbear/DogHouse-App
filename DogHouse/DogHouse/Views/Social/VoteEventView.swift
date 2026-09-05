@@ -13,10 +13,34 @@ struct VoteEventView: View {
     var doghousedUsers: [UserProfile]
 
     @State private var showConfetti = false
-    @State private var isResolving = false
-    @State private var resolvedWinnerId: String?
     /// Flipped once, when the deadline passes — not polled every second.
     @State private var isExpired = false
+    /// The settled document, once the server has resolved or cancelled the
+    /// vote. Until then the outcome shown is a local provisional tally.
+    @State private var finalEvent: VoteEvent?
+
+    /// Freshest copy of the vote: the settled document, else the live
+    /// listener's, else the one the banner was tapped with.
+    private var currentEvent: VoteEvent {
+        finalEvent
+            ?? voteService.activeVoteEvents.first { $0.id == voteEvent.id }
+            ?? voteEvent
+    }
+
+    private var tally: [String: Int] { currentEvent.tally }
+    private var totalVotes: Int { tally.values.reduce(0, +) }
+    private var hasVoted: Bool { currentEvent.votes[voteService.userId] != nil }
+    /// Voting closes at the deadline or the moment the server settles it.
+    private var isClosed: Bool { isExpired || finalEvent != nil }
+
+    /// Who goes free: the server's answer once it has one, otherwise the
+    /// provisional local leader(s) so the screen isn't blank for the up-to-
+    /// a-minute wait on resolveExpiredVotes.
+    private var freedUserIds: [String] {
+        if let finalEvent { return finalEvent.freedUserIds }
+        guard isExpired, let top = tally.values.max(), top > 0 else { return [] }
+        return tally.filter { $0.value == top }.map(\.key)
+    }
 
     var body: some View {
         ScrollView {
@@ -60,7 +84,7 @@ struct VoteEventView: View {
                 }
 
                 // Result section
-                if isExpired {
+                if isClosed {
                     resultView
                 }
             }
@@ -74,16 +98,14 @@ struct VoteEventView: View {
                 guard !Task.isCancelled else { return }
             }
             isExpired = true
-            guard !isResolving, resolvedWinnerId == nil else { return }
-            isResolving = true
-            // Compute winner locally for immediate display; the server
-            // (resolveExpiredVotes) is the authority and performs the release.
-            let liveEvent = voteService.activeVoteEvents.first { $0.id == voteEvent.id } ?? voteEvent
-            var voteCounts: [String: Int] = [:]
-            for votedForId in liveEvent.votes.values {
-                voteCounts[votedForId, default: 0] += 1
-            }
-            resolvedWinnerId = voteCounts.max(by: { $0.value < $1.value })?.key
+        }
+        // The server is the authority: resolveExpiredVotes releases the
+        // winner up to a minute after the deadline, and a partner letting
+        // their dog out cancels the vote at any time. Either way the screen
+        // shows the real outcome, not a guess from a stale tally.
+        .task(id: voteEvent.id) {
+            guard let settled = await voteService.awaitResult(voteId: voteEvent.id) else { return }
+            finalEvent = settled
         }
         .overlay {
             if showConfetti {
@@ -96,10 +118,9 @@ struct VoteEventView: View {
     // MARK: - Candidate Card
 
     private func candidateCard(user: UserProfile) -> some View {
-        let votes = voteService.votesFor(userId: user.id, in: voteEvent.id)
-        let hasVoted = voteService.hasVoted(in: voteEvent.id)
-        let votedForThis = voteEvent.votes.values.contains(user.id)
-        let total = voteService.totalVotes(in: voteEvent.id)
+        let votes = tally[user.id] ?? 0
+        let votedForThis = currentEvent.votes[voteService.userId] == user.id
+        let total = totalVotes
         let percentage = total > 0 ? Double(votes) / Double(total) : 0
 
         return VStack(spacing: 12) {
@@ -129,7 +150,7 @@ struct VoteEventView: View {
 
                 Spacer()
 
-                if !isExpired && !hasVoted {
+                if !isClosed && !hasVoted {
                     Button {
                         Task {
                             try? await voteService.castVote(
@@ -175,24 +196,55 @@ struct VoteEventView: View {
 
     // MARK: - Result View
 
+    private var freedUsers: [UserProfile] {
+        doghousedUsers.filter { freedUserIds.contains($0.id) }
+    }
+
+    private func name(of userId: String) -> String {
+        doghousedUsers.first { $0.id == userId }?.displayName
+            ?? currentEvent.doghousedUserNames?[userId]
+            ?? "A dog"
+    }
+
     private var resultView: some View {
         VStack(spacing: 12) {
-            Text("🎵 WHO LET THE DOGS OUT 🎵")
-                .font(.dhSubtitle)
-                .foregroundStyle(Color.cozyOrange)
-
-            if let winnerId = resolvedWinnerId ?? voteEvent.winnerId,
-               let winner = doghousedUsers.first(where: { $0.id == winnerId }) {
-                AvatarView(
-                    avatar: DogAvatar.avatar(for: winner.avatarId ?? "dog_1"),
-                    mood: .happy,
-                    size: 80
-                )
-                Text("\(winner.displayName) is FREE!")
+            if let finalEvent, finalEvent.isCancelled {
+                Text("🏠 VOTE CALLED OFF")
+                    .font(.dhSubtitle)
+                    .foregroundStyle(Color.cozyOrange)
+                Text(finalEvent.releasedUserId.map { "\(name(of: $0)) got let out early." }
+                     ?? "One of the dogs got let out early.")
+                    .font(.headline)
+            } else if !freedUsers.isEmpty {
+                Text("🎵 WHO LET THE DOGS OUT 🎵")
+                    .font(.dhSubtitle)
+                    .foregroundStyle(Color.cozyOrange)
+                HStack(spacing: 16) {
+                    ForEach(freedUsers) { winner in
+                        AvatarView(
+                            avatar: DogAvatar.avatar(for: winner.avatarId ?? "dog_1"),
+                            mood: .happy,
+                            size: 80
+                        )
+                    }
+                }
+                Text(freedUsers.count == 1
+                     ? "\(freedUsers[0].displayName) is FREE!"
+                     : "\(freedUsers.map(\.displayName).joined(separator: " & ")) are FREE! It's a tie!")
                     .font(.headline)
                     .foregroundStyle(Color.freedomGreen)
+                if finalEvent == nil {
+                    Text("Counting the votes…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else {
-                Text("Voting has ended!")
+                Text("🗳️ VOTING HAS ENDED")
+                    .font(.dhSubtitle)
+                    .foregroundStyle(Color.cozyOrange)
+                Text(finalEvent == nil
+                     ? "Counting the votes…"
+                     : "Nobody goes free this time 😬")
                     .font(.headline)
             }
         }
@@ -201,10 +253,9 @@ struct VoteEventView: View {
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .padding(.horizontal, 20)
-        .onAppear {
-            withAnimation {
-                showConfetti = true
-            }
+        .onChange(of: freedUsers.isEmpty, initial: true) { _, isEmpty in
+            guard !isEmpty, !showConfetti else { return }
+            withAnimation { showConfetti = true }
             Task {
                 try? await Task.sleep(for: .seconds(4))
                 withAnimation { showConfetti = false }

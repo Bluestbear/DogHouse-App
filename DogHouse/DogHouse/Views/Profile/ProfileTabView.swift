@@ -50,6 +50,7 @@ struct ProfileTabView: View {
                 accountSection
             }
             .navigationTitle("Profile")
+            .dhPageBackground()
             .sheet(isPresented: $showAvatarPicker) {
                 AvatarPickerView(currentAvatarId: authService.userProfile?.avatarId ?? "dog_1")
                     .environmentObject(authService)
@@ -260,6 +261,7 @@ struct ProfileTabView: View {
                     .datePickerStyle(.graphical)
             }
             .navigationTitle("Your Anniversary")
+            .dhPageBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

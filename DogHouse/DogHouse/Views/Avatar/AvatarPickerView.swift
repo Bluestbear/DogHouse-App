@@ -94,6 +94,7 @@ struct AvatarPickerView: View {
                 .padding(.bottom, 16)
             }
             .navigationTitle("Choose Your Dog")
+            .dhPageBackground()
             .navigationBarTitleDisplayMode(.inline)
         }
     }

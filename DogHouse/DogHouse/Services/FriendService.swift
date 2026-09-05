@@ -38,6 +38,8 @@ class FriendService: ObservableObject {
     private let fs = FirebaseService.shared
     private var linksListener: ListenerRegistration?
     private var profileCache: [String: UserProfile] = [:]
+    /// Bumped per rebuild so a slow, older rebuild can't overwrite a newer one
+    private var rebuildGeneration = 0
 
     private var myCoupleKey: String? {
         guard let partnerId, partnerId != "skipped" else { return nil }
@@ -119,10 +121,19 @@ class FriendService: ObservableObject {
             }
             return
         }
+        rebuildGeneration += 1
+        let generation = rebuildGeneration
         var couples: [FriendCouple] = []
         var dropped = 0
         for doc in docs {
             let keys = doc.data()["coupleKeys"] as? [String] ?? []
+            // A link from a previous pairing (the server dissolves these on
+            // un-pair, but the listener can deliver first) is not ours to
+            // show — skip it quietly rather than report it as broken.
+            guard keys.contains(myKey) else {
+                Logger.data.info("Friendship \(doc.documentID, privacy: .public) belongs to a former pairing — ignored")
+                continue
+            }
             guard let otherKey = keys.first(where: { $0 != myKey }) else {
                 Logger.data.error("Friendship \(doc.documentID, privacy: .public) has no couple key other than mine")
                 dropped += 1
@@ -147,6 +158,9 @@ class FriendService: ObservableObject {
             }
             couples.append(FriendCouple(coupleKey: otherKey, members: profiles))
         }
+        // Two snapshots close together (add, then the listener's echo) run
+        // two rebuilds; the profile fetches can finish out of order.
+        guard generation == rebuildGeneration else { return }
         friendCouples = couples.sorted { $0.displayName < $1.displayName }
 
         // A link that exists but can't be turned into a row is exactly the

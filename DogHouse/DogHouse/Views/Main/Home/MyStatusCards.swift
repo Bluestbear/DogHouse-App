@@ -51,36 +51,65 @@ struct MyDoghouseInfoCard: View {
     let onShowTasks: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
-            VStack(spacing: 4) {
-                Text("You've been sent to the DogHouse!")
-                    .font(.dhTitle)
-                    .multilineTextAlignment(.center)
+        VStack(spacing: 14) {
+            // Just the clock: the greeting at the top of Home already says
+            // you're in the doghouse, so repeating it here was noise.
+            ElapsedTimeText(start: event.startedAt)
+                .font(.dhTimer)
+                .foregroundStyle(.red)
+                // A bare running clock read aloud says nothing about what it
+                // counts, and a per-second label would never stop talking —
+                // so this reads the coarse duration, as TimeAtHomeCard does.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("In the DogHouse for \(event.duration.formattedDuration)")
 
-                ElapsedTimeText(start: event.startedAt)
-                    .font(.dhTimer)
-                    .foregroundStyle(.red)
-            }
+            // The reason, as a plain quote. It used to sit in a labelled
+            // panel inside the card; the quotation marks carry that on their
+            // own and cost no vertical space.
+            Text("\u{201C}\(event.reason)\u{201D}")
+                .font(.dhSubtitle)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Reason: \(event.reason)")
 
-            reasonSection
-
-            VStack(alignment: .leading, spacing: 12) {
-                Label("How to get out:", systemImage: "lightbulb.fill")
-                    .font(.dhCaptionBold)
-                    .foregroundStyle(Color.cozyOrange)
-
-                waitItOutRow
-
-                // Redemption: mark the make-it-up suggestion as done
+            // The ways out. These were four tinted panels stacked inside the
+            // card, under their own heading — now plain rows separated by
+            // hairlines, and only the ones you can act on.
+            VStack(spacing: 0) {
                 if let suggestion = event.suggestion {
                     if event.redemptionRequested == true {
-                        redemptionPendingRow
+                        WayOutRow(
+                            symbol: "hourglass", tint: .cozyOrange,
+                            title: "Waiting for \(partnerName)",
+                            detail: "You said you made it up"
+                        )
                     } else {
-                        redemptionButton(suggestion: suggestion)
+                        WayOutRow(
+                            symbol: "checkmark.circle.fill", tint: .freedomGreen,
+                            title: "I did it", detail: suggestion,
+                            accessory: "paperplane.fill", accessoryTint: .freedomGreen,
+                            action: onRequestRedemption
+                        )
                     }
+                    Divider()
                 }
-
-                tasksSection
+                if coupleTasksLoaded {
+                    WayOutRow(
+                        symbol: "list.clipboard.fill", tint: .cozyOrange,
+                        title: "Do a task", detail: tasksDetail,
+                        accessory: "chevron.right",
+                        action: onShowTasks
+                    )
+                    Divider()
+                }
+                // Last, and the only one that isn't a button: doing nothing
+                // is a way out too, it just isn't something you tap.
+                WayOutRow(
+                    symbol: "clock", tint: .secondary,
+                    title: "Sit it out",
+                    detail: "\(partnerName) can let you out any time"
+                )
             }
         }
         .padding(16)
@@ -90,133 +119,59 @@ struct MyDoghouseInfoCard: View {
         .padding(.horizontal, 20)
     }
 
-    private var reasonSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Reason", systemImage: "text.quote")
-                .font(.dhCaptionBold)
-                .foregroundStyle(.secondary)
-            Text(event.reason)
-                .font(.dhBody)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemGray5))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+    private var tasksDetail: String {
+        coupleTasks.isEmpty
+            ? "None agreed yet — tap to propose some"
+            : "\(coupleTasks.count) you both agreed on"
     }
+}
 
-    private var waitItOutRow: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "clock.fill")
-                .foregroundStyle(.secondary)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Wait it out")
-                    .font(.dhBodyBold)
-                Text("Stay here until \(partnerName) lets you out")
-                    .font(.dhCaption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(10)
-        .background(Color(.systemGray5))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-
-    private var redemptionPendingRow: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "hourglass")
-                .foregroundStyle(Color.cozyOrange)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Redemption requested")
-                    .font(.dhBodyBold)
-                Text("Waiting for \(partnerName) to confirm...")
-                    .font(.dhCaption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(10)
-        .background(Color.cozyOrange.opacity(0.15))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func redemptionButton(suggestion: String) -> some View {
-        Button(action: onRequestRedemption) {
-            HStack(spacing: 10) {
-                Text("🦴")
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("I did it!")
-                        .font(.dhBodyBold)
-                    Text("\"\(suggestion)\" — tell \(partnerName) you made it up")
-                        .font(.dhCaption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Image(systemName: "paperplane.fill")
-                    .font(.caption)
-                    .foregroundStyle(Color.freedomGreen)
-            }
-            .padding(10)
-            .background(Color.freedomGreen.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Mark the make-it-up suggestion as done and notify \(partnerName)")
-    }
+/// One way out of the doghouse: a flat row on the card, tappable when there
+/// is somewhere to go.
+private struct WayOutRow: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let detail: String
+    var accessory: String? = nil
+    var accessoryTint: Color = .secondary
+    var action: (() -> Void)? = nil
 
     @ViewBuilder
-    private var tasksSection: some View {
-        if coupleTasks.isEmpty && coupleTasksLoaded {
-            Button(action: onShowTasks) {
-                HStack(spacing: 10) {
-                    Image(systemName: "list.clipboard.fill")
-                        .foregroundStyle(Color.cozyOrange)
-                        .frame(width: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Do a Task")
-                            .font(.dhBodyBold)
-                        Text("No tasks set up yet — tap to propose tasks!")
-                            .font(.dhCaption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(10)
-                .background(Color.cozyOrange.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            }
-            .buttonStyle(.plain)
-        } else if !coupleTasks.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    Image(systemName: "list.clipboard.fill")
-                        .foregroundStyle(Color.cozyOrange)
-                        .frame(width: 28)
-                    Text("Do a Task")
-                        .font(.dhBodyBold)
-                    Spacer()
-                }
-
-                ForEach(coupleTasks) { task in
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(Color.cozyOrange)
-                            .frame(width: 6, height: 6)
-                        Text(task.title)
-                            .font(.dhBody)
-                    }
-                }
-            }
-            .padding(10)
-            .background(Color.cozyOrange.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+    var body: some View {
+        if let action {
+            Button(action: action) { content }
+                .buttonStyle(.doghouse)
+                .accessibilityLabel("\(title). \(detail)")
+        } else {
+            content.accessibilityElement(children: .combine)
         }
+    }
+
+    private var content: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.callout)
+                .foregroundStyle(tint)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.dhBodyBold)
+                    .foregroundStyle(.primary)
+                Text(detail)
+                    .font(.dhCaption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            if let accessory {
+                Image(systemName: accessory)
+                    .font(.caption)
+                    .foregroundStyle(accessoryTint)
+            }
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
     }
 }
 

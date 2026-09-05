@@ -79,6 +79,7 @@ struct InputTabView: View {
                 }
             }
             .navigationTitle("Input")
+            .dhPageBackground()
             .alert("Thanks! 🐾", isPresented: $showSent) {
                 Button("You're welcome") {}
             } message: {

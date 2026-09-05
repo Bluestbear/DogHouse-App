@@ -47,18 +47,24 @@ struct DoghouseScene: View {
     // The scene is decorative: it is assembled from shapes that mean nothing
     // read aloud. The status text carries the same information for VoiceOver.
     var body: some View {
-        ZStack {
-            sky
-            if stage.isNight { nightSky }
-            hills
-            if stage.showClouds { clouds }
-            ground
-            fence.offset(x: -138, y: 78)
-            tree.offset(x: 140, y: 44)
-            house.offset(y: 30)
-            weather
-            Color.white.opacity(flash)
-            statusText
+        // The scenery hangs off the sky as an overlay: several props are
+        // wider than the card (the 400pt hills), and as ZStack children they
+        // grew the card past the screen edges. An overlay can't size its
+        // parent, so the sky alone decides the card's width and the clip
+        // trims the overhang.
+        sky
+        .overlay {
+            ZStack {
+                if stage.isNight { nightSky }
+                hills
+                if stage.showClouds { clouds }
+                ground
+                fence.offset(x: -138, y: 78)
+                tree.offset(x: 140, y: 44)
+                house.offset(y: 30)
+                weather
+                Color.white.opacity(flash)
+            }
         }
         .frame(height: 320)
         .clipShape(RoundedRectangle(cornerRadius: 20))
@@ -506,25 +512,6 @@ struct DoghouseScene: View {
     }
 
     // MARK: - Status
-
-    private var statusText: some View {
-        VStack {
-            VStack(spacing: 2) {
-                Text(isCurrentUser ? "You're in the DogHouse 🐕" : "\(partnerName) is in the DogHouse 🐕")
-                    .font(.dhBodyBold)
-                    .foregroundStyle(.white)
-                Text(stage.statusText)
-                    .font(.dhCaption)
-                    .foregroundStyle(.white.opacity(0.8))
-                    .italic()
-            }
-            .padding(.horizontal, 14).padding(.vertical, 7)
-            .background(Color.black.opacity(0.28))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            Spacer()
-        }
-        .padding(.top, 12)
-    }
 
     // MARK: - Props
 

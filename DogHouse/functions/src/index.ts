@@ -363,6 +363,15 @@ export const onUserPaired = onDocumentUpdated(
 
     const uid = event.params.uid;
     const newPartnerId = after.partnerId as string | undefined;
+
+    // Un-pairing (or re-pairing with someone else) dissolves the old
+    // couple, and its friendships with it. Runs for both halves; the second
+    // run finds nothing left to delete.
+    const oldPartnerId = before?.partnerId as string | undefined;
+    if (oldPartnerId && oldPartnerId !== "skipped" && oldPartnerId !== newPartnerId) {
+      await dissolveCoupleFriendships(coupleKeyOf(uid, oldPartnerId));
+    }
+
     if (!newPartnerId || newPartnerId === "skipped") return;
     if (before?.partnerId === newPartnerId) return; // not a new pairing
 
@@ -479,31 +488,37 @@ export const onFeedPostCreated = onDocumentCreated(
     );
     if (jailbreakCandidates.size === 0) return;
 
+    // Dogs already being voted on are out of the pool. Previously only the
+    // FIRST matching post was examined, and if that dog was already in a
+    // vote the search stopped there — a third friend in the doghouse never
+    // got a vote even when another free candidate was waiting.
+    const activeVotes = await db
+      .collection("voteEvents")
+      .where("status", "==", "active")
+      .get();
+    const alreadyVotedOn = new Set<string>();
+    activeVotes.forEach((v) =>
+      ((v.data().doghousedUserIds ?? []) as string[]).forEach((id) => alreadyVotedOn.add(id))
+    );
+    if (alreadyVotedOn.has(receiverId)) return;
+
     const activePosts = await db
       .collection("feedPosts")
       .where("status", "==", "active")
       .get();
 
-    const otherPost = activePosts.docs.find(
-      (d) =>
-        d.id !== postId &&
-        d.data().receiverId !== receiverId &&
-        jailbreakCandidates.has(d.data().receiverId)
-    );
+    const millis = (t: unknown) => (t instanceof Timestamp ? t.toMillis() : 0);
+    const otherPost = activePosts.docs
+      .filter((d) => {
+        const dog = d.data().receiverId as string;
+        return d.id !== postId && dog !== receiverId
+          && jailbreakCandidates.has(dog) && !alreadyVotedOn.has(dog);
+      })
+      // Newest sending first — the most topical pairing
+      .sort((a, b) => millis(b.data().createdAt) - millis(a.data().createdAt))[0];
     if (!otherPost) return;
 
     const other = otherPost.data();
-
-    // Don't start a second vote if either dog is already in an active one
-    const existingVotes = await db
-      .collection("voteEvents")
-      .where("status", "==", "active")
-      .where("doghousedUserIds", "array-contains-any", [
-        receiverId,
-        other.receiverId,
-      ])
-      .get();
-    if (!existingVotes.empty) return;
 
     const audience = [
       ...new Set([...audienceIds, ...(other.audienceIds ?? [])]),
@@ -514,20 +529,30 @@ export const onFeedPostCreated = onDocumentCreated(
       [other.receiverId]: other.receiverName ?? "A friend",
     };
 
-    const voteRef = db.collection("voteEvents").doc();
+    // Deterministic id: two sendings landing within the same second each
+    // run this trigger, each sees the other as "the other post", and both
+    // would open a vote for the same pair. Deriving the id from the pair of
+    // posts makes the second create() fail instead.
+    const voteId = `joint_${[postId, otherPost.id].sort().join("_")}`;
+    const voteRef = db.collection("voteEvents").doc(voteId);
     const now = Timestamp.now();
-    await voteRef.set({
-      type: "joint_doghouse",
-      doghousedUserIds: dogs,
-      doghousedUserNames: dogNames,
-      votes: {},
-      startedAt: now,
-      endsAt: Timestamp.fromMillis(now.toMillis() + 30 * 60 * 1000),
-      winnerId: null,
-      status: "active",
-      audienceIds: audience,
-      feedPostIds: [postId, otherPost.id],
-    });
+    try {
+      await voteRef.create({
+        type: "joint_doghouse",
+        doghousedUserIds: dogs,
+        doghousedUserNames: dogNames,
+        votes: {},
+        startedAt: now,
+        endsAt: Timestamp.fromMillis(now.toMillis() + 30 * 60 * 1000),
+        winnerId: null,
+        status: "active",
+        audienceIds: audience,
+        feedPostIds: [postId, otherPost.id],
+      });
+    } catch {
+      logger.info(`[jailbreakVote] Vote ${voteId} already exists — concurrent trigger`);
+      return;
+    }
 
     const batch = db.batch();
     batch.update(event.data!.ref, { voteEventId: voteRef.id });
@@ -612,10 +637,15 @@ export const resolveExpiredVotes = onSchedule(
       const endsAt = vote.endsAt as Timestamp | undefined;
       if (!endsAt || endsAt.toMillis() > now.toMillis()) continue;
 
-      // Tally
+      // Tally — only votes for the dogs actually in this vote count. The
+      // rules enforce that too, but this is the code that hands out a
+      // release and an hour of immunity, so it must not trust the document.
+      const candidates = new Set<string>((vote.doghousedUserIds ?? []) as string[]);
       const counts: Record<string, number> = {};
       for (const votedForId of Object.values(vote.votes ?? {})) {
-        counts[votedForId as string] = (counts[votedForId as string] ?? 0) + 1;
+        const id = votedForId as string;
+        if (!candidates.has(id)) continue;
+        counts[id] = (counts[id] ?? 0) + 1;
       }
       const maxVotes = Math.max(0, ...Object.values(counts));
       const winners =
@@ -625,6 +655,7 @@ export const resolveExpiredVotes = onSchedule(
 
       // Release every winner's active doghouse event (tie → both go free)
       const releasedNames: string[] = [];
+      const freedIds: string[] = [];
       const overruledSenderIds: string[] = [];
       for (const winnerId of winners) {
         const events = await db
@@ -632,17 +663,29 @@ export const resolveExpiredVotes = onSchedule(
           .where("receiverId", "==", winnerId)
           .where("isActive", "==", true)
           .get();
+        if (events.empty) {
+          // Let out by their partner before the deadline (releasePartner
+          // normally cancels the vote, but the two can race by a minute).
+          // Nothing to release, and no fresh immunity for a dog who is home.
+          logger.info(`[resolveVotes] ${winnerId} won ${voteDoc.id} but is already out`);
+          continue;
+        }
         for (const ev of events.docs) {
           await ev.ref.update({
             isActive: false,
             endedAt: now,
             releasedBy: "vote",
           });
-          overruledSenderIds.push(ev.data().senderId as string);
+          const senderId = ev.data().senderId as string;
+          overruledSenderIds.push(senderId);
+          // Same bookkeeping as releasePartner: the sender's treat clock
+          // restarts too, so the doghouse hours are never paid out.
+          await db.collection("users").doc(senderId).update({ lastTreatAward: now });
         }
         // Grant the freed dog immunity (clients can no longer self-write it)
         await db.collection("users").doc(winnerId).update({
           immunityUntil: Timestamp.fromMillis(now.toMillis() + IMMUNITY_SECONDS * 1000),
+          lastTreatAward: now,
         });
         const posts = await db
           .collection("feedPosts")
@@ -656,6 +699,7 @@ export const resolveExpiredVotes = onSchedule(
             releasedByVote: true,
           });
         }
+        freedIds.push(winnerId);
         releasedNames.push(
           (vote.doghousedUserNames?.[winnerId] as string | undefined) ??
             (await displayName(winnerId))
@@ -664,8 +708,9 @@ export const resolveExpiredVotes = onSchedule(
 
       await voteDoc.ref.update({
         status: "completed",
-        winnerId: winners.length === 1 ? winners[0] : null,
-        winnerIds: winners,
+        endedAt: now,
+        winnerId: freedIds.length === 1 ? freedIds[0] : null,
+        winnerIds: freedIds,
       });
 
       // Announce the outcome
@@ -680,7 +725,7 @@ export const resolveExpiredVotes = onSchedule(
       // Winners get their own richer push from onDoghouseEvent, and the
       // senders whose dogs were freed get the anthem instead.
       audience = audience.filter(
-        (id) => !winners.includes(id) && !overruledSenderIds.includes(id)
+        (id) => !freedIds.includes(id) && !overruledSenderIds.includes(id)
       );
 
       // The sender whose dog the crowd freed gets the classic
@@ -698,7 +743,14 @@ export const resolveExpiredVotes = onSchedule(
           "No votes were cast... nobody goes free 😬",
           { data: { type: "feed" } }
         );
-      } else if (winners.length === 1) {
+      } else if (freedIds.length === 0) {
+        await notifyUsers(
+          audience,
+          "🗳️ The vote is over",
+          "The winner had already been let out. Nobody else goes free 😬",
+          { data: { type: "feed" } }
+        );
+      } else if (freedIds.length === 1) {
         await notifyUsers(
           audience,
           "🗳️ The people have spoken!",
@@ -714,7 +766,7 @@ export const resolveExpiredVotes = onSchedule(
         );
       }
       logger.info(
-        `[resolveVotes] Resolved ${voteDoc.id}: winners=${winners.join(",") || "none"}`
+        `[resolveVotes] Resolved ${voteDoc.id}: winners=${winners.join(",") || "none"} freed=${freedIds.join(",") || "none"}`
       );
     }
   }
@@ -821,7 +873,15 @@ export const onDeletionRequest = onDocumentCreated(
       await deleteWhere("wishes", "toUserId", uid);
       await deleteWhere("feedback", "fromUserId", uid);
       await deleteArrayContains("challenges", "participants", uid);
-      await deleteArrayContains("voteEvents", "audienceIds", uid);
+      // Votes: a deleted account merely leaves the audience. Deleting every
+      // vote it could see wiped other couples' running jailbreak votes. A
+      // vote it was a candidate in is meaningless without it and goes.
+      const votes = await db.collection("voteEvents")
+        .where("audienceIds", "array-contains", uid).get();
+      await Promise.all(votes.docs.map((d) =>
+        ((d.data().doghousedUserIds ?? []) as string[]).includes(uid)
+          ? d.ref.delete()
+          : d.ref.update({ audienceIds: FieldValue.arrayRemove(uid) })));
       await db.collection("bellyRubs").doc(uid).delete();
       await db.collection("roses").doc(uid).delete();
 
@@ -1122,6 +1182,17 @@ export const releasePartner = onCall({ region: REGION }, async (req) => {
       .where("eventId", "==", eventId).where("status", "==", "active").get();
     await Promise.all(posts.docs.map((p) =>
       p.ref.update({ status: "released", endedAt: now })));
+
+    // A dog let out by their partner is no longer a jailbreak candidate.
+    // Leaving the vote running kept the "both in the DogHouse" banner up on
+    // every friend's phone for the rest of the half hour, and let the
+    // resolver "free" — and re-immunise — a dog who was already home.
+    for (const p of posts.docs) {
+      const voteId = p.data().voteEventId as string | undefined;
+      if (voteId) {
+        await cancelVoteForReleasedDog(voteId, p.data().receiverId as string, uid);
+      }
+    }
     return { ok: true };
   });
 });
@@ -1422,6 +1493,79 @@ function friendshipIdFor(k1: string, k2: string): string {
   return [k1, k2].sort().join("__");
 }
 
+/**
+ * Close a running jailbreak vote because one of its dogs was let out by
+ * their partner. Status "cancelled" drops it from every client's active
+ * listener and keeps resolveExpiredVotes (active only) away from it.
+ */
+async function cancelVoteForReleasedDog(
+  voteId: string,
+  releasedId: string,
+  releasedBy: string
+): Promise<void> {
+  const ref = db.collection("voteEvents").doc(voteId);
+  const vote = await db.runTransaction(async (tx) => {
+    const data = (await tx.get(ref)).data();
+    if (!data || data.status !== "active") return null;
+    tx.update(ref, {
+      status: "cancelled",
+      cancelledBecause: "released",
+      releasedUserId: releasedId,
+      endedAt: Timestamp.now(),
+    });
+    return data;
+  });
+  if (!vote) return;
+
+  const name =
+    (vote.doghousedUserNames?.[releasedId] as string | undefined) ??
+    (await displayName(releasedId));
+  // The released dog and whoever released them already know.
+  const audience = ((vote.audienceIds ?? []) as string[]).filter(
+    (id) => id !== releasedId && id !== releasedBy
+  );
+  await notifyUsers(
+    audience,
+    "🏠 Jailbreak vote called off",
+    `${name} got let out early, so the vote's over.`,
+    { data: { type: "vote" } }
+  );
+  logger.info(`[jailbreakVote] Cancelled ${voteId}: ${releasedId} released by partner`);
+}
+
+/**
+ * After two couples part ways, stop each from seeing the other's sendings.
+ * Audiences are frozen into each post at creation, so without this the
+ * "you'll stop seeing each other's public sendings" promise held only for
+ * posts made after the removal.
+ */
+async function unshareFeedPosts(keyA: string, keyB: string): Promise<void> {
+  const membersOf = (key: string) => key.split("_");
+  const pairs: Array<[string, string[]]> = [
+    [keyA, membersOf(keyB)],
+    [keyB, membersOf(keyA)],
+  ];
+  for (const [ownerKey, strangers] of pairs) {
+    const posts = await db.collection("feedPosts")
+      .where("coupleKey", "==", ownerKey).get();
+    await Promise.all(posts.docs.map((p) =>
+      p.ref.update({ audienceIds: FieldValue.arrayRemove(...strangers) })));
+  }
+}
+
+/**
+ * A couple that splits takes its friendships with it: a link names the old
+ * pair in memberIds/coupleKeys, and neither ex-partner can display a couple
+ * they are no longer half of.
+ */
+async function dissolveCoupleFriendships(coupleKey: string): Promise<void> {
+  const links = await db.collection("coupleFriendships")
+    .where("coupleKeys", "array-contains", coupleKey).get();
+  if (links.empty) return;
+  await Promise.all(links.docs.map((d) => d.ref.delete()));
+  logger.info(`[friends] Dissolved ${links.size} friendship(s) of split couple ${coupleKey}`);
+}
+
 export const addCoupleFriend = onCall({ region: REGION }, async (req) => {
   const uid = requireAuth(req);
   const code: string = (req.data?.code ?? "").toString().toUpperCase();
@@ -1474,6 +1618,7 @@ export const removeCoupleFriend = onCall({ region: REGION }, async (req) => {
   const snap = await db.collection("coupleFriendships").doc(docId).get();
   if (snap.exists && (snap.data()?.memberIds ?? []).includes(uid)) {
     await snap.ref.delete();
+    await unshareFeedPosts(myKey, otherKey);
   }
   return { ok: true };
 });

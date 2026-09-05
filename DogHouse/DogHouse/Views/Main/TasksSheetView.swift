@@ -43,6 +43,7 @@ struct TasksSheetView: View {
                 }
             }
             .navigationTitle("Your Tasks")
+            .dhPageBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

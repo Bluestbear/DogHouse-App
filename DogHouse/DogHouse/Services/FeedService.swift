@@ -8,6 +8,7 @@
 
 import SwiftUI
 import Combine
+import OSLog
 import FirebaseAuth
 import FirebaseFirestore
 
@@ -47,10 +48,15 @@ class FeedService: ObservableObject {
         // sorting and the 7-day window are applied client-side.
         feedListener = fs.feedPostsCollection
             .whereField("audienceIds", arrayContains: userId)
-            .addSnapshotListener { [weak self] snapshot, _ in
+            .addSnapshotListener { [weak self] snapshot, error in
                 guard let self else { return }
                 Task { @MainActor [weak self] in
-                    guard let self, let docs = snapshot?.documents else { return }
+                    guard let self else { return }
+                    if let error {
+                        Logger.data.error("Feed listener failed: \(error.localizedDescription, privacy: .public)")
+                        return
+                    }
+                    guard let docs = snapshot?.documents else { return }
                     let cutoff = Date().addingTimeInterval(-Self.feedWindow)
                     self.posts = docs
                         .compactMap { try? self.fs.decode(FeedPost.self, from: $0) }

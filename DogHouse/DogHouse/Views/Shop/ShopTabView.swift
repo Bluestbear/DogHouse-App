@@ -58,7 +58,7 @@ struct ShopTabView: View {
             }
             .navigationTitle("Shop")
             .navigationBarTitleDisplayMode(.large)
-            .background(Color(.systemGroupedBackground))
+            .dhPageBackground()
             .sheet(isPresented: $showingTreatPacks) {
                 TreatPackSheet()
                     .environmentObject(authService)

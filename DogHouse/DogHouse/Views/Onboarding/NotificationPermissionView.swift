@@ -78,6 +78,7 @@ struct NotificationPermissionView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 24)
         }
+        .dhPageBackground()
         .interactiveDismissDisabled(isRequesting)
     }
 

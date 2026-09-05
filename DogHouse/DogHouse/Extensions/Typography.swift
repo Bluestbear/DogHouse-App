@@ -17,6 +17,9 @@ extension Font {
     // MARK: - Display
     /// Large display text for splash/animation screens (~32pt at default)
     static let dhDisplay = Font.system(.largeTitle, design: .rounded).weight(.black)
+    /// The greeting at the top of Home — the size the navigation large
+    /// title used to be there (~34pt at default)
+    static let dhLargeTitle = Font.system(.largeTitle, design: .rounded).weight(.bold)
     /// Screen title on auth and onboarding screens (~28pt at default)
     static let dhScreenTitle = Font.system(.title, design: .rounded).weight(.bold)
     /// Section title (~22pt at default)

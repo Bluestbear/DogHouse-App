@@ -71,6 +71,7 @@ struct CreateQuizSheet: View {
                 }
             }
             .navigationTitle("Create a Quiz")
+            .dhPageBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -124,6 +125,7 @@ struct PickQuizSheet: View {
                 }
             }
             .navigationTitle("Pick a Quiz")
+            .dhPageBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -151,6 +153,7 @@ private struct BankAnswerView: View {
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
         }
         .navigationTitle("Answer")
+        .dhPageBackground()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -205,6 +208,7 @@ struct AnswerQuizzesSheet: View {
                 }
             }
             .navigationTitle("Answer Quizzes")
+            .dhPageBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
@@ -250,6 +254,7 @@ struct QuizPlaySheet: View {
             }
         }
         .navigationTitle("Couple Quiz")
+        .dhPageBackground()
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -305,6 +310,7 @@ struct MyCardsSheet: View {
                 }
             }
             .navigationTitle("Whatever-I-Want")
+            .dhPageBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $showRedeem) {
@@ -349,6 +355,7 @@ struct RedeemWishSheet: View {
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
             .navigationTitle("Redeem Card 🎟️")
+            .dhPageBackground()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

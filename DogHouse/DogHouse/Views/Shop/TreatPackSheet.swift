@@ -58,7 +58,7 @@ struct TreatPackSheet: View {
             }
             .navigationTitle("Get Treats")
             .navigationBarTitleDisplayMode(.inline)
-            .background(Color(.systemGroupedBackground))
+            .dhPageBackground()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
