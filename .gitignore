@@ -83,3 +83,6 @@ DerivedData/
 # Compiled functions output (rebuilt by predeploy)
 functions/lib/
 DogHouse/functions/lib/
+
+# Local archives
+build/
