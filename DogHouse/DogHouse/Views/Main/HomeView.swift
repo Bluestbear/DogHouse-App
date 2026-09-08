@@ -375,10 +375,7 @@ struct HomeView: View {
                     handleBellyRubSend()
                 }
             }
-            .onChange(of: doghouseService.iAmInDoghouse) { writeWidgetState() }
-            .onChange(of: doghouseService.partnerIsInDoghouse) { writeWidgetState() }
-            .onChange(of: authService.userProfile?.avatarId) { writeWidgetState() }
-            .onChange(of: authService.partnerProfile?.avatarId) { writeWidgetState() }
+            .onChange(of: widgetSyncKey) { writeWidgetState() }
             } // ScrollViewReader
         }
         .errorBanner($errorMessage)
@@ -934,12 +931,37 @@ struct HomeView: View {
 
     private static let treatAwardInterval: TimeInterval = 3600
 
+    /// Everything the widget shows, folded into one value so a single
+    /// `.onChange` keeps HomeView's body within the type-checker's budget.
+    private var widgetSyncKey: String {
+        [
+            doghouseService.myDoghouseEvent?.id ?? "",
+            doghouseService.partnerDoghouseEvent?.id ?? "",
+            authService.userProfile?.avatarId ?? "",
+            authService.partnerProfile?.avatarId ?? "",
+            authService.userProfile?.displayName ?? "",
+            authService.partnerProfile?.displayName ?? "",
+        ].joined(separator: "|")
+    }
+
     private func writeWidgetState() {
         let defaults = UserDefaults(suiteName: "group.com.harrisonkrampe.doghouse")
         defaults?.set(authService.userProfile?.avatarId ?? "dog_1", forKey: "widget_myAvatarId")
         defaults?.set(authService.partnerProfile?.avatarId ?? "dog_1", forKey: "widget_partnerAvatarId")
         defaults?.set(doghouseService.iAmInDoghouse, forKey: "widget_myInDoghouse")
         defaults?.set(doghouseService.partnerIsInDoghouse, forKey: "widget_partnerInDoghouse")
+        // Extra fields for the character widget: who, since when, and how long at home.
+        defaults?.set(authService.userProfile?.displayName ?? "", forKey: "widget_myName")
+        defaults?.set(authService.partnerProfile?.displayName ?? "", forKey: "widget_partnerName")
+        defaults?.set(doghouseService.myDoghouseEvent?.startedAt.timeIntervalSince1970 ?? 0,
+                      forKey: "widget_myDoghouseSince")
+        defaults?.set(doghouseService.partnerDoghouseEvent?.startedAt.timeIntervalSince1970 ?? 0,
+                      forKey: "widget_partnerDoghouseSince")
+        defaults?.set(Date().addingTimeInterval(-timeSinceMyRelease).timeIntervalSince1970,
+                      forKey: "widget_myHomeSince")
+        defaults?.set(Date().addingTimeInterval(-partnerTimeSinceRelease).timeIntervalSince1970,
+                      forKey: "widget_partnerHomeSince")
+        defaults?.set(authService.partnerProfile != nil, forKey: "widget_hasPartner")
         WidgetCenter.shared.reloadAllTimelines()
     }
 

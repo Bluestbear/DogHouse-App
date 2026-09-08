@@ -7,6 +7,7 @@ import SwiftUI
 
 struct MainTabView: View {
     @EnvironmentObject var authService: AuthService
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var notificationService = NotificationService.shared
     // One challenge service shared by Home (games) and Profile (anniversary)
     @StateObject private var challengeService = ChallengeService(userId: "mock_user", partnerId: "mock_partner")
@@ -77,10 +78,16 @@ struct MainTabView: View {
             switch destination {
             case .home: selectedTab = .home
             case .friends: selectedTab = .friends
+            case .shop: selectedTab = .shop
             }
             notificationService.pendingDestination = nil
         }
         // Pre-permission explainer: shown once permission is still undecided
+        .task { await authService.recordActivity() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await authService.recordActivity() }
+        }
         .task {
             await notificationService.refreshStatus()
             if notificationService.authStatus == .notDetermined {

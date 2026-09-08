@@ -12,6 +12,7 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onCall, onRequest, HttpsError, CallableRequest } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import * as nodemailer from "nodemailer";
+import { pickNudge, preflight, NudgeMarkers, ActiveEvent } from "./nudges";
 
 const REGION = "europe-west1";
 
@@ -1479,6 +1480,112 @@ export const randomPhotoDash = onSchedule(
         { data: { type: "challenge" } });
       logger.info(`[photoDash] Started for couple ${key}`);
     }
+  }
+);
+
+// ─────────────────────────────────────────────────────────────
+// Engagement nudges — hourly, one per user per day, local daytime only.
+// The decision logic lives in nudges.ts (pure, node-testable); this is the
+// data-loading shell around it. See that file for the rules.
+// ─────────────────────────────────────────────────────────────
+export const engagementNudges = onSchedule(
+  { schedule: "0 * * * *", timeZone: "Etc/UTC", region: REGION },
+  async () => {
+    const nowMs = Date.now();
+    const paired = await db.collection("users").where("partnerId", "!=", "skipped").get();
+
+    // Cache per couple so both partners share the event/history reads.
+    const releaseHistory = new Map<string, Promise<FirebaseFirestore.QuerySnapshot>>();
+    const historyFor = (key: string) => {
+      let p = releaseHistory.get(key);
+      if (!p) {
+        p = db.collection("doghouseEvents")
+          .where("coupleKey", "==", key).where("isActive", "==", false)
+          .orderBy("startedAt", "desc").limit(40).get();
+        releaseHistory.set(key, p);
+      }
+      return p;
+    };
+    const activeEventFor = async (receiverId: string): Promise<ActiveEvent | undefined> => {
+      const snap = await db.collection("doghouseEvents")
+        .where("receiverId", "==", receiverId).where("isActive", "==", true).limit(1).get();
+      const doc = snap.docs[0];
+      if (!doc) return undefined;
+      const startedAt = doc.data().startedAt as Timestamp | undefined;
+      return { id: doc.id, startedAtMs: startedAt?.toMillis() ?? nowMs };
+    };
+
+    let sent = 0;
+    for (const meDoc of paired.docs) {
+      const uid = meDoc.id;
+      const me = meDoc.data();
+      const partnerId = me.partnerId as string | undefined;
+      if (!partnerId || partnerId === "skipped") continue;
+
+      try {
+        const privRef = privateDataRef(uid);
+        const priv = (await privRef.get()).data() ?? {};
+        const markers = (priv.nudges ?? {}) as NudgeMarkers;
+        const gateInput = {
+          hasToken: typeof priv.fcmToken === "string" && priv.fcmToken.length > 0,
+          remindersEnabled: priv.remindersEnabled as boolean | undefined,
+          timeZone: priv.timeZone as string | undefined,
+          markers,
+        };
+        if (preflight(gateInput, nowMs)) continue;
+
+        const partnerDoc = await db.collection("users").doc(partnerId).get();
+        const partner = partnerDoc.data();
+        if (!partner) continue;
+
+        const key = coupleKeyOf(uid, partnerId);
+        const [history, myActiveEvent, partnerActiveEvent, rubDoc] = await Promise.all([
+          historyFor(key), activeEventFor(uid), activeEventFor(partnerId),
+          db.collection("bellyRubs").doc(partnerId).get(),
+        ]);
+
+        // Mirrors DoghouseService.homeStartDate: last release, else account creation.
+        const createdMs = (d: FirebaseFirestore.DocumentData | undefined) =>
+          (d?.createdAt as Timestamp | undefined)?.toMillis() ?? nowMs;
+        const lastReleaseMs = (receiverId: string) => history.docs
+          .filter((d) => d.data().receiverId === receiverId)
+          .map((d) => (d.data().endedAt as Timestamp | undefined)?.toMillis() ?? 0)
+          .reduce((a, b) => Math.max(a, b), 0);
+        const homeStartMs = lastReleaseMs(uid) || createdMs(me);
+        const partnerHomeStartMs = lastReleaseMs(partnerId) || createdMs(partner);
+
+        const rub = rubDoc.data();
+        const lastBellyRubSentMs = rub?.fromUserId === uid
+          ? (rub.sentAt as Timestamp | undefined)?.toMillis() : undefined;
+
+        const result = pickNudge({
+          name: (me.displayName as string | undefined) ?? "You",
+          partnerName: (partner.displayName as string | undefined) ?? "Your partner",
+          treats: (me.treats as number | undefined) ?? 100,
+          ownedItemIds: (me.ownedItemIds as string[] | undefined) ?? [],
+          homeStartMs, partnerHomeStartMs, myActiveEvent, partnerActiveEvent,
+          lastTreatAwardMs: (me.lastTreatAward as Timestamp | undefined)?.toMillis(),
+          lastBellyRubSentMs,
+          pairedSinceMs: Math.max(createdMs(me), createdMs(partner)),
+          lastActiveAtMs: (priv.lastActiveAt as Timestamp | undefined)?.toMillis(),
+          ...gateInput,
+          cosmeticPrices: COSMETIC_PRICES,
+        }, nowMs);
+
+        if (result.decision) {
+          const { title, body, data, category } = result.decision;
+          await notifyUser(uid, title, body, { data, category });
+          sent += 1;
+          logger.info(`[nudges] ${result.decision.kind} → ${uid}`);
+        }
+        if (Object.keys(result.markers).length > 0) {
+          await privRef.set({ nudges: result.markers }, { merge: true });
+        }
+      } catch (err) {
+        logger.error(`[nudges] Failed for ${uid}:`, err);
+      }
+    }
+    logger.info(`[nudges] Tick done: ${sent} sent across ${paired.size} paired users`);
   }
 );
 

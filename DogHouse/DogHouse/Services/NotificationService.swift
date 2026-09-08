@@ -27,6 +27,7 @@ final class NotificationService: ObservableObject {
     enum Destination: Equatable {
         case home      // doghouse status, redemption, games
         case friends   // feed, votes, friend requests
+        case shop      // "you can now afford…" nudges
     }
 
     enum PushAction: Equatable {
@@ -85,7 +86,15 @@ final class NotificationService: ObservableObject {
             ],
             intentIdentifiers: []
         )
-        UNUserNotificationCenter.current().setNotificationCategories([bellyRub, redemption])
+        // The belly-rub reminder nudge: same one-tap send, different wording.
+        let bellyRubNudge = UNNotificationCategory(
+            identifier: "BELLY_RUB_NUDGE",
+            actions: [
+                UNNotificationAction(identifier: "RUB_BACK", title: "Send a belly rub 🐾", options: [.foreground])
+            ],
+            intentIdentifiers: []
+        )
+        UNUserNotificationCenter.current().setNotificationCategories([bellyRub, redemption, bellyRubNudge])
     }
 
     // MARK: - Routing
@@ -108,8 +117,10 @@ final class NotificationService: ObservableObject {
         switch userInfo["type"] as? String {
         case "feed", "vote", "friends":
             pendingDestination = .friends
+        case "shop":
+            pendingDestination = .shop
         default:
-            // doghouse, redemption, belly_rub, challenge, shop → Home
+            // doghouse, redemption, belly_rub, challenge, treats, streak, level → Home
             pendingDestination = .home
         }
     }

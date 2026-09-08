@@ -6,7 +6,8 @@
     "serve": "npm run build && firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "e2e:friends": "npm run build && cd .. && firebase emulators:exec --only firestore,functions --project doghouse-5e80e \"node functions/e2e-friends.mjs\""
+    "e2e:friends": "npm run build && cd .. && firebase emulators:exec --only firestore,functions --project doghouse-5e80e \"node functions/e2e-friends.mjs\"",
+    "test:nudges": "npm run build && node test-nudges.mjs"
   },
   "engines": {
     "node": "22"

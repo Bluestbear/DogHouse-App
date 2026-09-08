@@ -303,6 +303,15 @@ struct ProfileTabView: View {
                 HapticService.shared.isEnabled = newValue
             }
 
+            // Engagement nudges (treats waiting, doghouse reminders, streaks…).
+            // Event pushes like "you've been sent to the doghouse" are not affected.
+            Toggle(isOn: Binding(
+                get: { authService.remindersEnabled },
+                set: { enabled in Task { await authService.setRemindersEnabled(enabled) } }
+            )) {
+                Label("Reminders", systemImage: "bell.badge.fill")
+            }
+
             Button {
                 showAvatarPicker = true
             } label: {

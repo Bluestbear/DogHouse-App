@@ -71,4 +71,11 @@ struct UserPrivateData: Codable {
     var partnerCode: String?
     /// FCM registration token for this account's current device.
     var fcmToken: String?
+    /// Last time the app was in the foreground; the engagement nudges only
+    /// go to accounts that have been quiet for a while.
+    var lastActiveAt: Date?
+    /// IANA zone, so nudges respect this account's local daytime.
+    var timeZone: String?
+    /// Engagement nudges toggle (Profile → Reminders). Absent means on.
+    var remindersEnabled: Bool?
 }

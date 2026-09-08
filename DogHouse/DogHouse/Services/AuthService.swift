@@ -28,6 +28,9 @@ class AuthService: ObservableObject {
     /// document. Views must use this rather than `userProfile.partnerCode`,
     /// which is a legacy field that no longer exists on new accounts.
     @Published var partnerCode: String?
+    /// Engagement nudges (Profile → Reminders). Server treats absent as on.
+    @Published var remindersEnabled = true
+    private var lastActivityWrite: Date?
 
     private var authStateListener: AuthStateDidChangeListenerHandle?
     private var userDocListener: ListenerRegistration?
@@ -174,8 +177,38 @@ class AuthService: ObservableObject {
                         return
                     }
                     self.partnerCode = snapshot?.data()?["partnerCode"] as? String
+                    self.remindersEnabled = snapshot?.data()?["remindersEnabled"] as? Bool ?? true
                 }
             }
+    }
+
+    /// Heartbeat for the engagement nudges: when this account last had the
+    /// app open, and in which time zone. Throttled so a foreground/background
+    /// flurry costs one write. Absent on the server means "unknown", and
+    /// unknown accounts get no re-engagement nudges at all.
+    func recordActivity() async {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        if let last = lastActivityWrite, Date().timeIntervalSince(last) < 15 * 60 { return }
+        lastActivityWrite = Date()
+        do {
+            try await fs.privateDataDocument(for: uid).setData([
+                "lastActiveAt": FieldValue.serverTimestamp(),
+                "timeZone": TimeZone.current.identifier,
+            ], merge: true)
+        } catch {
+            Logger.data.error("Activity write failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func setRemindersEnabled(_ enabled: Bool) async {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        remindersEnabled = enabled
+        do {
+            try await fs.privateDataDocument(for: uid)
+                .setData(["remindersEnabled": enabled], merge: true)
+        } catch {
+            Logger.data.error("Reminders toggle write failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// One-time migration for accounts created before the pairing code and
