@@ -274,6 +274,10 @@ class DoghouseService: ObservableObject {
             "suggestion": suggestion as Any,
             "isPublic": isPublic
         ])
+        AnalyticsService.shared.log(.sendToDoghouse, [
+            "is_public": isPublic,
+            "has_suggestion": suggestion?.isEmpty == false
+        ])
         // Snapshot listeners will update both devices
     }
 
@@ -282,6 +286,7 @@ class DoghouseService: ObservableObject {
     func requestRedemption() async throws {
         guard let event = myDoghouseEvent else { return }
         try await CloudFunctions.shared.call("requestRedemption", ["eventId": event.id])
+        AnalyticsService.shared.log(.requestRedemption, ["hours_served": Int(event.duration / 3600)])
     }
 
     /// Release partner from the doghouse. The server marks the event inactive,
@@ -292,6 +297,10 @@ class DoghouseService: ObservableObject {
         try await CloudFunctions.shared.call("releasePartner", [
             "eventId": event.id,
             "byRedemption": releasedBy == "redemption"
+        ])
+        AnalyticsService.shared.log(.releasePartner, [
+            "released_by": releasedBy,
+            "hours_served": Int(event.duration / 3600)
         ])
     }
 
@@ -357,6 +366,7 @@ class DoghouseService: ObservableObject {
             "fromDisplayName": fromDisplayName,
             "sentAt": Timestamp(date: Date())
         ])
+        AnalyticsService.shared.log(.sendBellyRub)
     }
 
     // MARK: - Roses
@@ -366,5 +376,6 @@ class DoghouseService: ObservableObject {
     func sendRoses() async throws {
         guard let partnerId, partnerId != "skipped" else { return }
         try await CloudFunctions.shared.call("sendRoses")
+        AnalyticsService.shared.log(.sendRoses)
     }
 }

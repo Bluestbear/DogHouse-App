@@ -53,6 +53,10 @@ struct MainTabView: View {
             }
         }
         .tint(Color.dogHouseBrown)
+        // SwiftUI reports no screens on its own, so each tab names itself.
+        .onChange(of: selectedTab, initial: true) { _, tab in
+            AnalyticsService.shared.logScreen(String(describing: tab))
+        }
         .overlay {
             TourOverlayView(
                 userName: authService.userProfile?.displayName ?? "there",

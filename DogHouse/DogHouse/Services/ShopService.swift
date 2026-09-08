@@ -22,6 +22,12 @@ class ShopService {
             "itemId": item.id,
             "forPartner": forPartner
         ])
+        AnalyticsService.shared.log(.purchaseCosmetic, [
+            "item_id": item.id,
+            "category": item.category.rawValue,
+            "price": item.price,
+            "gifted": forPartner
+        ])
     }
 
     // MARK: - Equip / Unequip (self or partner)
@@ -30,6 +36,7 @@ class ShopService {
         try await cf.call("equipCosmetic", [
             "itemId": item.id, "category": item.category.rawValue, "forPartner": false
         ])
+        AnalyticsService.shared.log(.equipCosmetic, ["item_id": item.id, "on_partner": false])
     }
 
     func unequipOnSelf(category: CosmeticCategory) async throws {
@@ -42,6 +49,7 @@ class ShopService {
         try await cf.call("equipCosmetic", [
             "itemId": item.id, "category": item.category.rawValue, "forPartner": true
         ])
+        AnalyticsService.shared.log(.equipCosmetic, ["item_id": item.id, "on_partner": true])
     }
 
     func unequipOnPartner(category: CosmeticCategory, partnerId: String) async throws {
@@ -56,5 +64,6 @@ class ShopService {
     /// from event history; the client only passes the level-based rate.
     func awardHomeTreats(treatsPerHour: Int) async throws {
         try await cf.call("claimHomeTreats", ["treatsPerHour": treatsPerHour])
+        AnalyticsService.shared.log(.claimTreats, ["rate": treatsPerHour])
     }
 }

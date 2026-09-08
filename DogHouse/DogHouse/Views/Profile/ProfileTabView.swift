@@ -21,6 +21,7 @@ struct ProfileTabView: View {
     @State private var unpairError: String?
     @State private var soundEnabled = SoundService.shared.isEnabled
     @State private var hapticEnabled = HapticService.shared.isEnabled
+    @State private var analyticsEnabled = AnalyticsService.shared.isEnabled
     @State private var showAppleRevocation = false
     @ObservedObject private var tour = TourCoordinator.shared
 
@@ -377,6 +378,13 @@ struct ProfileTabView: View {
 
     private var accountSection: some View {
         Section {
+            Toggle(isOn: $analyticsEnabled) {
+                Label("Share Usage Data", systemImage: "chart.bar.fill")
+            }
+            .onChange(of: analyticsEnabled) { _, newValue in
+                AnalyticsService.shared.isEnabled = newValue
+            }
+
             Link(destination: URL(string: "https://doghouse-5e80e.web.app/privacy.html")!) {
                 Label("Privacy Policy", systemImage: "hand.raised.fill")
             }

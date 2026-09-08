@@ -47,6 +47,11 @@ final class FirebaseService {
 
     /// Owner-only companion document holding this account's secrets
     /// (pairing code, push token). See the /users/{uid}/private rules.
+    /// Append-only session history. Clients may create their own rows and can
+    /// never read the collection back (see firestore.rules); it is read from
+    /// the Firebase console.
+    var sessionsCollection: CollectionReference { db.collection("sessions") }
+
     func privateDataDocument(for userId: String) -> DocumentReference {
         usersCollection.document(userId).collection("private").document("data")
     }

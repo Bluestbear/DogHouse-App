@@ -49,6 +49,7 @@ final class NotificationService: ObservableObject {
         let granted = (try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .badge, .sound])) ?? false
         await refreshStatus()
+        AnalyticsService.shared.log(.pushPermission, ["granted": granted])
         if granted {
             Self.registerForRemoteNotifications()
         }
@@ -101,6 +102,12 @@ final class NotificationService: ObservableObject {
 
     /// Called by the AppDelegate when a notification is tapped or an action chosen
     func handleNotificationResponse(userInfo: [AnyHashable: Any], actionIdentifier: String) {
+        // `type` is set on every push the server sends, so this is how the
+        // engagement nudges get measured: which kinds actually get opened.
+        AnalyticsService.shared.log(.pushOpened, [
+            "push_type": (userInfo["type"] as? String) ?? "unknown",
+            "action": actionIdentifier == UNNotificationDefaultActionIdentifier ? "tap" : actionIdentifier
+        ])
         switch actionIdentifier {
         case "RELEASE":
             pendingAction = .releasePartner

@@ -8,6 +8,13 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>DogHouse uses the camera so you can snap and send a photo during a Photo Dash.</string>
+	<!-- Analytics starts OFF and is switched on by AnalyticsService.start(),
+	     which reads the user's Profile → Share Usage Data choice. Without
+	     this the SDK collects for the few milliseconds between
+	     FirebaseApp.configure() and that call, which would make the opt-out
+	     a promise the app doesn't quite keep. -->
+	<key>FIREBASE_ANALYTICS_COLLECTION_ENABLED</key>
+	<false/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<!-- Google Sign-In callback. This must stay identical to REVERSED_CLIENT_ID

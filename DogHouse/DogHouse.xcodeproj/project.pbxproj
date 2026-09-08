@@ -15,6 +15,7 @@
 		52066C012F72000000C321C8 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 52066C002F72000000C321C8 /* FirebaseCrashlytics */; };
 		52066D012F73000000C321C8 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 52066D002F73000000C321C8 /* GoogleSignIn */; };
 		52066D032F73000000C321C8 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 52066D022F73000000C321C8 /* GoogleSignInSwift */; };
+		52066E012F74000000C321C8 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 52066E002F74000000C321C8 /* FirebaseAnalyticsWithoutAdIdSupport */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -120,6 +121,7 @@
 				52066C012F72000000C321C8 /* FirebaseCrashlytics in Frameworks */,
 				52066D012F73000000C321C8 /* GoogleSignIn in Frameworks */,
 				52066D032F73000000C321C8 /* GoogleSignInSwift in Frameworks */,
+				52066E012F74000000C321C8 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -199,6 +201,7 @@
 				52066C002F72000000C321C8 /* FirebaseCrashlytics */,
 				52066D002F73000000C321C8 /* GoogleSignIn */,
 				52066D022F73000000C321C8 /* GoogleSignInSwift */,
+				52066E002F74000000C321C8 /* FirebaseAnalyticsWithoutAdIdSupport */,
 			);
 			productName = DogHouse;
 			productReference = 520664792F6EF32C00C321C8 /* DogHouse.app */;
@@ -855,6 +858,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 52066D042F73000000C321C8 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignInSwift;
+		};
+		52066E002F74000000C321C8 /* FirebaseAnalyticsWithoutAdIdSupport */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5206651C2F6F511800C321C8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalyticsWithoutAdIdSupport;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

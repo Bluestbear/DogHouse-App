@@ -49,6 +49,9 @@ const ALLOW_SANDBOX_PURCHASES = true;
 // dashboard at any time, and that replay is what must not double-credit.
 const PURCHASE_KEY_RETENTION_DAYS = 180;
 
+// How long the per-user session history is kept before cleanupSessions prunes it.
+const SESSION_RETENTION_DAYS = 90;
+
 // Shared secret set on the RevenueCat webhook's Authorization header.
 // Set with: firebase functions:secrets:set REVENUECAT_WEBHOOK_SECRET
 const revenuecatWebhookSecret = defineSecret("REVENUECAT_WEBHOOK_SECRET");
@@ -1789,6 +1792,35 @@ export const backfillPrivateUserData = onSchedule(
 // from growing without bound. No security rule grants clients access to
 // this collection — the default deny applies.
 // ─────────────────────────────────────────────────────────────
+/**
+ * Prune the session history. Rows exist to answer "how often does this couple
+ * come back?", which no question needs more than 90 days of — and an activity
+ * trail is the kind of data that should age out rather than accumulate.
+ */
+export const cleanupSessions = onSchedule(
+  { schedule: "0 4 * * *", timeZone: "Europe/Berlin", region: REGION },
+  async () => {
+    const cutoff = Timestamp.fromMillis(Date.now() - SESSION_RETENTION_DAYS * 24 * 3_600_000);
+    let deleted = 0;
+
+    // Bounded per run so one invocation cannot blow the memory limit. Deleting
+    // the oldest first means no cursor is needed: each page is gone before the
+    // next query runs.
+    for (let i = 0; i < 10; i++) {
+      const snap = await db.collection("sessions")
+        .where("at", "<", cutoff).orderBy("at").limit(500).get();
+      if (snap.empty) break;
+
+      const batch = db.batch();
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      deleted += snap.size;
+      if (snap.size < 500) break;
+    }
+    logger.info(`[cleanupSessions] Deleted ${deleted} session rows older than ${SESSION_RETENTION_DAYS}d`);
+  }
+);
+
 export const cleanupIdempotencyKeys = onSchedule(
   { schedule: "30 3 * * *", timeZone: "Europe/Berlin", region: REGION },
   async () => {

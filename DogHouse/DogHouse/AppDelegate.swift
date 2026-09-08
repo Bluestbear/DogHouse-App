@@ -25,6 +25,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNot
         // AuthService so a crash can be tied back to a support request.
         Crashlytics.crashlytics().setCrashlyticsCollectionEnabled(true)
 
+        // Product analytics. Opt-out, mirrored from Profile → Share Usage Data;
+        // applied here so a user who turned it off never logs a launch event.
+        AnalyticsService.shared.start()
+
         // In-app purchases. Configured at launch; the account is attached
         // later, when auth resolves (AuthService.listenToAuthState).
         Task { @MainActor in PurchaseService.shared.configure() }

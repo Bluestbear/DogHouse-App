@@ -238,6 +238,17 @@ service cloud.firestore {
       );
     }
 
+    // Session history — one row per app open, used only to see how often
+    // people come back. Create-only and never readable by any client: it is
+    // a per-user activity trail, so exposing it would be exactly the kind of
+    // cross-user enumeration `allow list: if false` on /users exists to stop.
+    // Read it from the Firebase console; cleanupSessions prunes it.
+    match /sessions/{sessionId} {
+      allow read, update, delete: if false;
+      allow create: if authed()
+        && request.resource.data.userId == request.auth.uid;
+    }
+
     // Belly rubs — doc id is the receiver's uid. The receiver reads
     // (their own incoming-rub listener); only their partner can send, and
     // must stamp the write with their own uid so the display name shown in

@@ -198,6 +198,40 @@ class AuthService: ObservableObject {
         } catch {
             Logger.data.error("Activity write failed: \(error.localizedDescription, privacy: .public)")
         }
+        await recordSessionIfNew(uid: uid)
+    }
+
+    /// Append to the session history read from the Firebase console: who was
+    /// in the app, and when. `lastActiveAt` above only ever holds the most
+    /// recent open, which answers "is this user quiet?" but not "how often do
+    /// they come back?".
+    ///
+    /// A session is a foreground after at least 30 minutes away, so a user
+    /// flicking in and out logs one row rather than a dozen. The boundary is
+    /// kept in UserDefaults so a relaunch a minute later is not a new session.
+    ///
+    /// Nothing is written when the user has opted out of usage sharing: this
+    /// is product analytics, not app functionality, unlike `lastActiveAt`
+    /// which drives the engagement nudges they can toggle separately.
+    private func recordSessionIfNew(uid: String) async {
+        guard AnalyticsService.shared.isEnabled else { return }
+        let defaults = UserDefaults.standard
+        let key = "lastSessionStart"
+        let previous = defaults.object(forKey: key) as? Date
+        if let previous, Date().timeIntervalSince(previous) < 30 * 60 { return }
+        defaults.set(Date(), forKey: key)
+
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        do {
+            try await fs.sessionsCollection.addDocument(data: [
+                "userId": uid,
+                "at": FieldValue.serverTimestamp(),
+                "appVersion": version ?? "unknown",
+                "platform": "ios",
+            ])
+        } catch {
+            Logger.data.error("Session write failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     func setRemindersEnabled(_ enabled: Bool) async {
@@ -434,6 +468,7 @@ class AuthService: ObservableObject {
 
         let result = try await Auth.auth().createUser(withEmail: email, password: password)
         try await bootstrapProfileIfNeeded(uid: result.user.uid, displayName: displayName)
+        AnalyticsService.shared.log(.signupComplete, ["method": "email"])
 
         // The snapshot listener will pick up userProfile automatically
     }
@@ -473,6 +508,7 @@ class AuthService: ObservableObject {
               userProfile?.isTourComplete != true else { return }
         do {
             try await fs.usersCollection.document(uid).updateData(["tourComplete": true])
+            AnalyticsService.shared.log(.tourComplete)
         } catch {
             Logger.data.error("tourComplete write failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -717,6 +753,8 @@ class AuthService: ObservableObject {
         // causing the batch to fail silently and the view to never advance.
         // Each user entering the other's code handles mutual pairing independently.
         try await fs.usersCollection.document(myUid).updateData(["partnerId": partnerUid])
+        AnalyticsService.shared.log(.partnerPaired)
+        AnalyticsService.shared.setPairedProperty(true)
 
         // Snapshot listener will update userProfile.partnerId → OnboardingContainerView auto-advances
     }
@@ -738,6 +776,7 @@ class AuthService: ObservableObject {
             profile.avatarId = id
             userProfile = profile
         }
+        AnalyticsService.shared.log(.avatarChosen, ["avatar_id": id])
         Task {
             try? await fs.usersCollection.document(uid).updateData(["avatarId": id])
         }
