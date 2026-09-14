@@ -107,50 +107,6 @@ struct PartnerInDoghouseCard: View {
     }
 }
 
-// MARK: - Partner At Home
-
-/// The "home sweet home" bar shown when the partner is not in the doghouse.
-struct PartnerHomeBar: View {
-    let partner: UserProfile
-    let cosmetics: AvatarCosmetics
-
-    var body: some View {
-        HStack(spacing: 12) {
-            AvatarView(
-                avatar: DogAvatar.avatar(for: partner.avatarId ?? "dog_1"),
-                mood: .happy,
-                size: 52,
-                cosmetics: cosmetics
-            )
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(partner.displayName)
-                    .font(.dhBodyBold)
-                Text("Home sweet home")
-                    .font(.dhCaption)
-                    .foregroundStyle(Color.freedomGreen)
-            }
-
-            Spacer()
-
-            if partner.hasImmunity {
-                Label("Immune", systemImage: "shield.fill")
-                    .font(.dhBadge)
-                    .foregroundStyle(.blue)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.1))
-                    .clipShape(Capsule())
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 20)
-    }
-}
-
 /// Why the send button is greyed out: they were just let out and are briefly
 /// untouchable.
 struct PartnerImmunityBanner: View {

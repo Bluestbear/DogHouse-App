@@ -37,6 +37,10 @@ enum TourAnchorID: String, CaseIterable, Sendable {
     case treatBalance     // Shop: the 🦴 balance capsule
     case addCouple        // Friends: enter a couple's code
     case anniversary      // Profile: anniversary section
+
+    /// Controls drawn as a circle clipped out of a wider frame. The
+    /// spotlight is squared to the circle rather than tracing the frame.
+    var isCircular: Bool { self == .rosesButton }
 }
 
 // MARK: - Steps
@@ -282,8 +286,13 @@ final class TourAnchorStore: ObservableObject {
 extension View {
     /// Tag a control so the tour can spotlight it. Frames are reported in
     /// window coordinates, which is the space the overlay draws in.
-    func tourAnchor(_ id: TourAnchorID) -> some View {
-        modifier(TourAnchorModifier(id: id))
+    ///
+    /// `horizontalInset` trims the reported frame on both sides. Several Home
+    /// controls are full-width views whose visible card sits inside their own
+    /// 20 pt padding; without the inset the spotlight hugged the screen edges
+    /// and its ring was clipped off both sides.
+    func tourAnchor(_ id: TourAnchorID, horizontalInset: CGFloat = 0) -> some View {
+        modifier(TourAnchorModifier(id: id, horizontalInset: horizontalInset))
     }
 }
 
@@ -298,6 +307,7 @@ extension View {
 /// converts from any hierarchy to the window correctly.
 private struct TourAnchorModifier: ViewModifier {
     let id: TourAnchorID
+    let horizontalInset: CGFloat
 
     func body(content: Content) -> some View {
         content.background(
@@ -305,7 +315,9 @@ private struct TourAnchorModifier: ViewModifier {
                 // Reports on attach and on layout — the moments a toolbar
                 // item first has a window at all.
                 WindowFrameProbeView(id: id) { frame in
-                    TourAnchorStore.shared.register(id, frame: frame)
+                    TourAnchorStore.shared.register(
+                        id, frame: frame.insetBy(dx: horizontalInset, dy: 0)
+                    )
                 }
                 // Reports on scroll, which UIKit's layoutSubviews does not
                 // see for a view that merely moved with its scroll view.

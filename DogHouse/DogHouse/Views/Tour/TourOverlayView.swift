@@ -21,6 +21,12 @@ struct TourOverlayView: View {
     let partnerName: String
 
     @State private var pulse = false
+    /// The target once it has stopped moving. The spotlight and card are
+    /// revealed against this, not the live frame: a control that is still
+    /// scrolling into place (Profile's list settles in two hops when the tab
+    /// is created for the tour) would otherwise show the ring at a halfway
+    /// position and then slide it.
+    @State private var settledTarget: CGRect?
 
     /// Breathing room between the control's edge and the spotlight edge.
     private let spotlightPadding: CGFloat = 8
@@ -35,16 +41,38 @@ struct TourOverlayView: View {
                 let bounds = geo.frame(in: .global)
                 let target = spotlight(for: step, in: bounds)
 
+                // An anchored step whose control is not laid out yet (a tab
+                // created lazily, a row still scrolling in) shows only the
+                // dim until the control exists. Centring the card meanwhile
+                // and then sliding it to the control read as a "flip".
+                let ready = step.anchor == nil || (target != nil && settledTarget == target)
+                let shown = ready ? target : nil
+
                 ZStack {
-                    backdrop(cutout: target)
-                    if let target {
-                        spotlightRing(target)
+                    backdrop(cutout: shown)
+                    if let shown {
+                        spotlightRing(shown)
+                            .transition(.opacity)
                     }
-                    callout(step: step, target: target, bounds: bounds)
+                    if ready {
+                        callout(step: step, target: shown, bounds: bounds)
+                            // A new card per step: steps cross-fade instead
+                            // of one card sliding across the screen.
+                            .id(step)
+                            .transition(.opacity)
+                    }
                 }
-                .animation(.spring(duration: 0.45), value: step)
-                .animation(.spring(duration: 0.45), value: target)
+                .animation(.easeInOut(duration: 0.35), value: step)
+                .animation(.easeInOut(duration: 0.35), value: shown)
                 .transition(.opacity)
+                // Restarts whenever the step or the live frame changes; the
+                // target counts as settled once it has held still this long.
+                .task(id: SettleKey(step: step, target: target)) {
+                    settledTarget = nil
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled else { return }
+                    settledTarget = target
+                }
                 .accessibilityAddTraits(.isModal)
                 .onAppear { pulse = true }
                 // Reset so a replayed tour gets its breathing ring back.
@@ -65,9 +93,18 @@ struct TourOverlayView: View {
               let frame = windowFrame(for: anchor),
               frame.width > 0, frame.height > 0,
               frame.intersects(bounds) else { return nil }
-        return frame
+        var shape = frame
+        if anchor.isCircular {
+            let side = min(shape.width, shape.height)
+            shape = CGRect(x: shape.midX - side / 2, y: shape.midY - side / 2, width: side, height: side)
+        }
+        let cutout = shape
             .offsetBy(dx: -bounds.minX, dy: -bounds.minY)
             .insetBy(dx: -spotlightPadding, dy: -spotlightPadding)
+        // Whatever the anchor reports, the ring must stay on screen: a
+        // cut-off ring reads as a layout bug, not a highlight.
+        let clamped = cutout.intersection(bounds.insetBy(dx: 4, dy: 4).offsetBy(dx: -bounds.minX, dy: -bounds.minY))
+        return clamped.isNull ? cutout : clamped
     }
 
     /// Registered frame first; toolbar buttons fall back to a UIKit lookup
@@ -88,23 +125,43 @@ struct TourOverlayView: View {
 
     // MARK: - Layers
 
+    /// The dim, with the spotlight punched out of it. The hole is a separate
+    /// view knocked out with `destinationOut`, so it fades in and out on its
+    /// own and moves with the same animation as the ring — an even-odd path
+    /// animating from a zero rect grew the hole out of the screen's corner
+    /// whenever a step's control was not there yet.
     private func backdrop(cutout: CGRect?) -> some View {
-        SpotlightShape(cutout: cutout ?? .zero, cornerRadius: spotlightRadius)
-            .fill(Color.black.opacity(0.62), style: FillStyle(eoFill: true))
-            .contentShape(Rectangle())
-            // Tapping the dimmed area advances — quicker than reaching for
-            // Next every time, and there is nothing else it could mean.
-            .onTapGesture { tour.next() }
-            .accessibilityHidden(true)
+        ZStack {
+            Rectangle()
+                .fill(Color.black.opacity(0.62))
+            if let cutout {
+                RoundedRectangle(cornerRadius: spotlightRadius)
+                    .fill(.black)
+                    .frame(width: cutout.width, height: cutout.height)
+                    .position(x: cutout.midX, y: cutout.midY)
+                    .blendMode(.destinationOut)
+                    .transition(.opacity)
+            }
+        }
+        .compositingGroup()
+        .contentShape(Rectangle())
+        // Tapping the dimmed area advances — quicker than reaching for
+        // Next every time, and there is nothing else it could mean.
+        .onTapGesture { tour.next() }
+        .accessibilityHidden(true)
     }
 
     private func spotlightRing(_ target: CGRect) -> some View {
         RoundedRectangle(cornerRadius: spotlightRadius)
             .stroke(Color.cozyOrange, lineWidth: 3)
             .frame(width: target.width, height: target.height)
-            .position(x: target.midX, y: target.midY)
+            // Scale BEFORE positioning. `.position` makes the view fill the
+            // overlay, so a scale applied after it pivoted on the screen's
+            // centre and pushed the ring ~10 pt off its control at the top
+            // (toolbar) and bottom (send button) of the screen.
             .scaleEffect(pulse ? 1.03 : 1.0)
             .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: pulse)
+            .position(x: target.midX, y: target.midY)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -228,6 +285,11 @@ struct TourOverlayView: View {
     }
 }
 
+private struct SettleKey: Equatable {
+    let step: TourStep
+    let target: CGRect?
+}
+
 // MARK: - Pointer
 
 /// The little wedge between the card and the spotlight.
@@ -240,42 +302,6 @@ private struct Pointer: View {
             .frame(width: 22, height: 11)
             .rotationEffect(pointsUp ? .zero : .degrees(180))
             .accessibilityHidden(true)
-    }
-}
-
-// MARK: - Spotlight Shape
-
-/// Full-rect fill with a rounded hole. Drawn with even-odd fill so the hole
-/// really is transparent (and tappable through, if we ever want that).
-struct SpotlightShape: Shape {
-    var cutout: CGRect
-    var cornerRadius: CGFloat
-
-    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<CGFloat, CGFloat>> {
-        get {
-            AnimatablePair(
-                AnimatablePair(cutout.minX, cutout.minY),
-                AnimatablePair(cutout.width, cutout.height)
-            )
-        }
-        set {
-            cutout = CGRect(
-                x: newValue.first.first, y: newValue.first.second,
-                width: newValue.second.first, height: newValue.second.second
-            )
-        }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.addRect(rect)
-        if cutout.width > 0, cutout.height > 0 {
-            path.addRoundedRect(
-                in: cutout,
-                cornerSize: CGSize(width: cornerRadius, height: cornerRadius)
-            )
-        }
-        return path
     }
 }
 

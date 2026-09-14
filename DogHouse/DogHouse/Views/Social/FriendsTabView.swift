@@ -83,9 +83,18 @@ struct FriendsTabView: View {
             // lets the List lay out its rows before scrolling to one.
             .onChange(of: tour.currentStep, initial: true) { _, step in
                 guard step == .friends else { return }
+                // No scroll animation: the overlay is dimmed and the
+                // spotlight fades in once the row has settled, so a visible
+                // glide (with the ring chasing it) only added motion. One
+                // scroll, after the List has laid out — scrolling earlier
+                // lands on an estimate and the row then hops again. The
+                // second call is a safety net for a slow first layout; it is
+                // a no-op when the row is already in place.
                 Task {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    proxy.scrollTo("tour-add-couple", anchor: .center)
                     try? await Task.sleep(for: .milliseconds(350))
-                    withAnimation { proxy.scrollTo("tour-add-couple", anchor: .center) }
+                    proxy.scrollTo("tour-add-couple", anchor: .center)
                 }
             }
             } // ScrollViewReader

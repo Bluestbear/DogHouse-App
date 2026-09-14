@@ -24,6 +24,9 @@ struct ProfileTabView: View {
     @State private var analyticsEnabled = AnalyticsService.shared.isEnabled
     @State private var showAppleRevocation = false
     @ObservedObject private var tour = TourCoordinator.shared
+    /// Collapsed by default: once a couple has been at it for a while the
+    /// history runs to dozens of rows and pushed everything below it off screen.
+    @State private var historyExpanded = false
 
     var body: some View {
         NavigationStack {
@@ -98,9 +101,18 @@ struct ProfileTabView: View {
             // lets the List lay out its rows before scrolling to one.
             .onChange(of: tour.currentStep, initial: true) { _, step in
                 guard step == .anniversary else { return }
+                // No scroll animation: the overlay is dimmed and the
+                // spotlight fades in once the row has settled, so a visible
+                // glide (with the ring chasing it) only added motion. One
+                // scroll, after the List has laid out — scrolling earlier
+                // lands on an estimate and the row then hops again. The
+                // second call is a safety net for a slow first layout; it is
+                // a no-op when the row is already in place.
                 Task {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    proxy.scrollTo("tour-anniversary", anchor: .center)
                     try? await Task.sleep(for: .milliseconds(350))
-                    withAnimation { proxy.scrollTo("tour-anniversary", anchor: .center) }
+                    proxy.scrollTo("tour-anniversary", anchor: .center)
                 }
             }
             } // ScrollViewReader
@@ -191,38 +203,60 @@ struct ProfileTabView: View {
 
     private var historySection: some View {
         Section("DogHouse History") {
-            if doghouseService.doghouseHistory.isEmpty {
+            let history = doghouseService.doghouseHistory
+            if history.isEmpty {
                 EmptyStateView(
                     icon: "checkmark.shield",
                     title: "Clean Record!",
                     subtitle: "No doghouse history yet. Keep it up!"
                 )
             } else {
-                ForEach(doghouseService.doghouseHistory) { event in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Image(systemName: event.senderId == myUserId ? "arrow.right.circle" : "arrow.left.circle")
-                                .foregroundStyle(event.senderId == myUserId ? Color.cozyOrange : .red)
-                            Text(event.senderId == myUserId ? "You sent them" : "You were sent")
-                                .font(.subheadline.bold())
-                            Spacer()
-                            Text(event.startedAt.formatted(.dateTime.month().day()))
+                DisclosureGroup(isExpanded: $historyExpanded) {
+                    ForEach(history) { event in
+                        historyRow(event)
+                    }
+                } label: {
+                    HStack {
+                        Label(
+                            history.count == 1 ? "1 stay" : "\(history.count) stays",
+                            systemImage: "clock.arrow.circlepath"
+                        )
+                        .font(.subheadline.bold())
+                        Spacer()
+                        if let latest = history.first {
+                            Text("Last \(latest.startedAt.formatted(.dateTime.month().day()))")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        Text(event.reason)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if let duration = event.endedAt?.timeIntervalSince(event.startedAt) {
-                            Text("Duration: \(duration.formattedDuration)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
                     }
-                    .padding(.vertical, 4)
                 }
+                .tint(Color.cozyOrange)
             }
         }
+    }
+
+    private func historyRow(_ event: DoghouseEvent) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: event.senderId == myUserId ? "arrow.right.circle" : "arrow.left.circle")
+                    .foregroundStyle(event.senderId == myUserId ? Color.cozyOrange : .red)
+                Text(event.senderId == myUserId ? "You sent them" : "You were sent")
+                    .font(.subheadline.bold())
+                Spacer()
+                Text(event.startedAt.formatted(.dateTime.month().day()))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(event.reason)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let duration = event.endedAt?.timeIntervalSince(event.startedAt) {
+                Text("Duration: \(duration.formattedDuration)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Anniversary

@@ -476,7 +476,7 @@ struct HomeView: View {
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .frame(height: 320)
-        .tourAnchor(.sceneWindow)
+        .tourAnchor(.sceneWindow, horizontalInset: 20)
         .id("tour-scene")
 
         // Page indicator: name labels flanking the dots
@@ -580,7 +580,6 @@ struct HomeView: View {
         }
         .overlay(alignment: .topTrailing) {
             sendRosesButton
-                .tourAnchor(.rosesButton)
                 .padding(.trailing, 32)
                 .padding(.top, 16)
         }
@@ -606,6 +605,10 @@ struct HomeView: View {
             .background(.ultraThinMaterial)
             .clipShape(Circle())
             .shadow(radius: 3)
+            // Anchored on the puck itself, not the Button: the button's
+            // frame carries extra hit padding and the spotlight came out as a
+            // lopsided rectangle around a circle.
+            .tourAnchor(.rosesButton)
         }
         .disabled(isSendingRoses)
         // The label is a bare emoji, which VoiceOver reads as "rose" with no
@@ -646,7 +649,7 @@ struct HomeView: View {
             level: currentRoomLevel,
             timeSinceRelease: timeSinceMyRelease
         )
-        .tourAnchor(.roomProgress)
+        .tourAnchor(.roomProgress, horizontalInset: 20)
         .id("tour-progress")
 
         if let myHomeStart {
@@ -724,10 +727,9 @@ struct HomeView: View {
 
     @ViewBuilder
     private var partnerFreeSection: some View {
-        if let partner = authService.partnerProfile {
-            PartnerHomeBar(partner: partner, cosmetics: partnerCosmetics)
-        }
-
+        // The "Marie · Home sweet home" bar used to sit here. The partner's
+        // window right above already shows their dog at home, so the bar only
+        // repeated it and cost a row of space.
         GraceMeterView(charges: myGraceCharges)
 
         if let partner = authService.partnerProfile, partner.hasImmunity,
@@ -745,7 +747,7 @@ struct HomeView: View {
             hasGraceCharges: myGraceCharges > 0,
             onTap: { showSendSheet = true }
         )
-        .tourAnchor(.sendButton)
+        .tourAnchor(.sendButton, horizontalInset: 20)
         .id("tour-send")
     }
 
