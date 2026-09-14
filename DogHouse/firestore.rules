@@ -149,6 +149,26 @@ service cloud.firestore {
         && request.resource.data.fromUserId == request.auth.uid;
     }
 
+    // Content reports — create-only, as yourself. onReportCreated emails the
+    // developer. Never readable by clients (a report names other users).
+    match /reports/{reportId} {
+      allow read, update, delete: if false;
+      allow create: if authed()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.targetType in ['feedPost', 'user', 'photo']
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() <= 100
+        && request.resource.data.get('details', '').size() <= 1000;
+    }
+
+    // Block list — one doc per user, readable by its owner (the feed and
+    // friends list filter on it). Written only by the blockUser /
+    // unblockUser callables, which also sever the couple friendship.
+    match /blocks/{userId} {
+      allow read: if authed() && request.auth.uid == userId;
+      allow write: if false;
+    }
+
     // Account deletion requests — write-only marker for your own uid;
     // the onDeletionRequest Cloud Function does the actual cleanup.
     match /deletionRequests/{userId} {
@@ -213,15 +233,15 @@ service cloud.firestore {
              .affectedKeys().hasOnly([request.auth.uid]);
     }
 
-    // Redeemed "Whatever I Want" cards. Sender creates; the receiver can
-    // mark it fulfilled.
+    // Redeemed "Whatever I Want" cards. Creation is SERVER-ONLY (the
+    // redeemWishCard callable checks and decrements the card balance); a
+    // client create used to bypass the economy entirely. The receiver can
+    // mark a wish fulfilled.
     match /wishes/{wishId} {
       allow read: if authed() && (
         request.auth.uid == resource.data.fromUserId ||
         request.auth.uid == resource.data.toUserId
       );
-      allow create: if authed()
-        && request.auth.uid == request.resource.data.fromUserId;
       allow update: if authed()
         && request.auth.uid == resource.data.toUserId
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fulfilled']);

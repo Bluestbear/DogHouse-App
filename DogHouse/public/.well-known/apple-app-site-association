@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": ["4QU866ZD6N.com.Harrison.DogHouse"],
+        "components": [
+          { "/": "/pair/*", "comment": "Pairing links pre-fill the partner code" }
+        ]
+      }
+    ]
+  }
+}

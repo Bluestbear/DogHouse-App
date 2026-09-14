@@ -220,6 +220,26 @@ assert.ok(!(await postFor(U.B)).data().audienceIds.some((u) => [U.G, U.H].includ
 assert.ok((await postFor(U.B)).data().audienceIds.includes(U.C), "CD still see AB's post");
 ok("removing a couple deletes the link and un-shares both couples' posts");
 
+// 7b. Blocking severs the friendship and stops re-linking
+await call("blockUser", U.D, { userId: U.A });
+assert.deepEqual((await docData(`blocks/${U.D}`)).blockedUserIds, [U.A]);
+await until("AB↔CD link severed by block", async () =>
+  !(await db.doc(`coupleFriendships/${[key(U.A, U.B), key(U.C, U.D)].sort().join("__")}`).get()).exists);
+for (const p of (await db.collection("feedPosts").where("coupleKey", "==", key(U.A, U.B)).get()).docs) {
+  assert.ok(!p.data().audienceIds.includes(U.C) && !p.data().audienceIds.includes(U.D),
+    "AB's posts no longer reach C or D");
+}
+await assert.rejects(call("addCoupleFriend", U.A, { code: codeOf("C") }), /can't be added/);
+await assert.rejects(call("addCoupleFriend", U.C, { code: codeOf("B") }), /can't be added/);
+await assert.rejects(call("blockUser", U.C, { userId: U.D }), /un-pair/);
+ok("D blocks A → link gone, posts unshared, neither couple can re-add, partner can't be blocked");
+
+await call("unblockUser", U.D, { userId: U.A });
+assert.deepEqual((await docData(`blocks/${U.D}`)).blockedUserIds, []);
+await call("addCoupleFriend", U.A, { code: codeOf("C") });
+assert.ok(await docData(`coupleFriendships/${[key(U.A, U.B), key(U.C, U.D)].sort().join("__")}`));
+ok("unblock → the couples can link again");
+
 // 8. Un-pairing dissolves the couple's friendships
 await db.doc(`users/${U.A}`).update({ partnerId: FieldValue.delete() });
 await until("AB↔CD link dissolved", async () =>

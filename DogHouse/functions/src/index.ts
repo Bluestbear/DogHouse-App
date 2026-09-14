@@ -68,6 +68,45 @@ const COSMETIC_PRICES: Record<string, number> = {
   glasses_round: 90, glasses_ski: 110,
 };
 
+// Room progression — mirrors RoomLevel in Swift (RoomProgression.swift).
+// Thresholds are hours at home since the last release (or account creation);
+// treats/hour is the rate for that level. The client shows this; the server
+// is the authority for what claimHomeTreats actually pays.
+const ROOM_LEVELS: Array<{ hours: number; rate: number }> = [
+  { hours: 0, rate: 1 },      // bareBones
+  { hours: 1, rate: 1 },      // basicChair
+  { hours: 6, rate: 2 },      // blanket
+  { hours: 24, rate: 2 },     // pillowAndRug
+  { hours: 72, rate: 3 },     // fireplace
+  { hours: 168, rate: 3 },    // tvAndArt
+  { hours: 336, rate: 4 },    // plantsAndBooks
+  { hours: 720, rate: 4 },    // luxury
+  { hours: 1440, rate: 5 },   // penthouse
+  { hours: 2160, rate: 5 },   // palace
+];
+
+/** Treats per hour for someone who has been home since `homeStartMs`. */
+export function roomRateFor(homeStartMs: number, nowMs: number): number {
+  const hours = Math.max(0, nowMs - homeStartMs) / 3_600_000;
+  let rate = ROOM_LEVELS[0].rate;
+  for (const level of ROOM_LEVELS) {
+    if (hours >= level.hours) rate = level.rate;
+  }
+  return rate;
+}
+
+/**
+ * When this user's current stay at home began: their most recent release,
+ * else account creation. Mirrors DoghouseService.homeStartDate.
+ */
+async function homeStartMsFor(uid: string, createdAt?: Timestamp): Promise<number> {
+  const last = await db.collection("doghouseEvents")
+    .where("receiverId", "==", uid).where("isActive", "==", false)
+    .orderBy("endedAt", "desc").limit(1).get();
+  const endedAt = last.docs[0]?.data().endedAt as Timestamp | undefined;
+  return endedAt?.toMillis() ?? createdAt?.toMillis() ?? Date.now();
+}
+
 function categoryOf(itemId: string): string {
   return itemId.split("_")[0]; // "necklace_gold" -> "necklace"
 }
@@ -876,6 +915,8 @@ export const onDeletionRequest = onDocumentCreated(
       await deleteWhere("wishes", "fromUserId", uid);
       await deleteWhere("wishes", "toUserId", uid);
       await deleteWhere("feedback", "fromUserId", uid);
+      await deleteWhere("reports", "reporterId", uid);
+      await db.collection("blocks").doc(uid).delete();
       await deleteArrayContains("challenges", "participants", uid);
       // Votes: a deleted account merely leaves the audience. Deleting every
       // vote it could see wiped other couples' running jailbreak votes. A
@@ -1359,13 +1400,17 @@ export const claimHomeTreats = onCall({ region: REGION }, async (req) => {
       !(await db.collection("doghouseEvents")
         .where("receiverId", "==", id).where("isActive", "==", true).limit(1).get()).empty;
     if (await inDoghouse(uid)) return { ok: true, awarded: 0 };
-    const partnerId = (await meRef.get()).data()?.partnerId as string | undefined;
+    const meData = (await meRef.get()).data() ?? {};
+    const partnerId = meData.partnerId as string | undefined;
     if (partnerId && partnerId !== "skipped" && await inDoghouse(partnerId)) {
       return { ok: true, awarded: 0 };
     }
 
-    // Rate scales with room level (time since last release), matching the client.
-    const rate = Math.max(1, Math.min(5, Number(req.data?.treatsPerHour ?? 1)));
+    // Rate scales with room level (time since last release). Derived here
+    // from event history; the client used to send it and any client could
+    // simply claim the top rate.
+    const createdAt = meData.createdAt as Timestamp | undefined;
+    const rate = roomRateFor(await homeStartMsFor(uid, createdAt), Date.now());
 
     // The elapsed-hours read and the lastTreatAward write must be atomic, or two
     // concurrent claims each award the same accrued hours.
@@ -1703,6 +1748,10 @@ export const addCoupleFriend = onCall({ region: REGION }, async (req) => {
     throw new HttpsError("invalid-argument", "That's your own couple!");
   }
 
+  if (await anyBlockBetween([uid, myPartner], [themId, themPartner])) {
+    throw new HttpsError("permission-denied", "That couple can't be added.");
+  }
+
   const docId = friendshipIdFor(myKey, themKey);
   await db.collection("coupleFriendships").doc(docId).set({
     coupleKeys: [myKey, themKey],
@@ -1730,6 +1779,110 @@ export const removeCoupleFriend = onCall({ region: REGION }, async (req) => {
     await snap.ref.delete();
     await unshareFeedPosts(myKey, otherKey);
   }
+  return { ok: true };
+});
+
+// ═════════════════════════════════════════════════════════════
+// MODERATION — reports and blocks (App Store Guideline 1.2).
+//
+// `reports/{id}` is create-only for the reporter; onReportCreated emails
+// the developer so every report is looked at by a person. `blocks/{uid}`
+// holds the uids this user has blocked. It is readable by its owner and
+// written only here: blocking also severs the couple friendship between
+// the two couples, and addCoupleFriend refuses to re-link while any block
+// exists between any of the four people.
+// ═════════════════════════════════════════════════════════════
+
+/** True when anyone in `a` blocks anyone in `b`, or the reverse. */
+async function anyBlockBetween(a: string[], b: string[]): Promise<boolean> {
+  const ids = [...new Set([...a, ...b])];
+  const docs = await Promise.all(ids.map((id) => db.collection("blocks").doc(id).get()));
+  for (const d of docs) {
+    const blocked = (d.data()?.blockedUserIds ?? []) as string[];
+    const owner = d.id;
+    const others = a.includes(owner) ? b : b.includes(owner) ? a : [];
+    if (others.some((o) => blocked.includes(o))) return true;
+  }
+  return false;
+}
+
+export const onReportCreated = onDocumentCreated(
+  { document: "reports/{reportId}", region: REGION, secrets: [gmailAppPassword] },
+  async (event) => {
+    const r = event.data?.data();
+    if (!r) return;
+    const reporter = await displayName(r.reporterId ?? "");
+    const lines = [
+      `Target: ${r.targetType ?? "?"} ${r.targetId ?? "?"}`,
+      `Reported user: ${r.targetUserId ?? "-"}`,
+      `Reason: ${r.reason ?? "?"}`,
+      "",
+      r.details ?? "",
+      "",
+      `— ${reporter} (uid: ${r.reporterId ?? "?"}), report ${event.params.reportId}`,
+    ];
+    try {
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: FEEDBACK_EMAIL, pass: gmailAppPassword.value() },
+      });
+      await transporter.sendMail({
+        from: `"DogHouse App" <${FEEDBACK_EMAIL}>`,
+        to: FEEDBACK_EMAIL,
+        subject: `[DogHouse REPORT] ${r.targetType ?? "content"} — ${r.reason ?? ""}`,
+        text: lines.join("\n"),
+      });
+      logger.info(`[report] Emailed report ${event.params.reportId}`);
+    } catch (err) {
+      logger.error("[report] Email failed (doc is still in Firestore):", err);
+    }
+  }
+);
+
+export const blockUser = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const target: string = (req.data?.userId ?? "").toString();
+  if (!target || target === uid) throw new HttpsError("invalid-argument", "Pick someone to block.");
+
+  const me = (await db.collection("users").doc(uid).get()).data();
+  const myPartner: string | undefined = me?.partnerId;
+  if (target === myPartner) {
+    throw new HttpsError("failed-precondition", "To stop seeing your partner, un-pair from Profile.");
+  }
+
+  await db.collection("blocks").doc(uid).set({
+    blockedUserIds: FieldValue.arrayUnion(target),
+    updatedAt: Timestamp.now(),
+  }, { merge: true });
+
+  // Sever the couple friendship, if there is one, so neither couple keeps
+  // seeing the other's sendings or landing in the same jailbreak votes.
+  if (myPartner && myPartner !== "skipped") {
+    const them = (await db.collection("users").doc(target).get()).data();
+    const themPartner: string | undefined = them?.partnerId;
+    if (themPartner && themPartner !== "skipped") {
+      const myKey = coupleKeyOf(uid, myPartner);
+      const themKey = coupleKeyOf(target, themPartner);
+      const link = await db.collection("coupleFriendships")
+        .doc(friendshipIdFor(myKey, themKey)).get();
+      if (link.exists) {
+        await link.ref.delete();
+        await unshareFeedPosts(myKey, themKey);
+      }
+    }
+  }
+  logger.info(`[block] ${uid} blocked ${target}`);
+  return { ok: true };
+});
+
+export const unblockUser = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const target: string = (req.data?.userId ?? "").toString();
+  if (!target) throw new HttpsError("invalid-argument", "Missing user.");
+  await db.collection("blocks").doc(uid).set({
+    blockedUserIds: FieldValue.arrayRemove(target),
+    updatedAt: Timestamp.now(),
+  }, { merge: true });
   return { ok: true };
 });
 

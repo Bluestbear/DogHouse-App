@@ -491,6 +491,70 @@ describe("challenges", () => {
 
 // ───────────────────────── server-only collections ─────────────────────────
 
+describe("wishes", () => {
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "wishes", "w1"),
+        { fromUserId: ALICE, toUserId: BOB, text: "breakfast in bed" });
+    });
+  });
+
+  test("sender and receiver can read a wish; a stranger cannot", async () => {
+    await assertSucceeds(getDoc(doc(as(ALICE), "wishes", "w1")));
+    await assertSucceeds(getDoc(doc(as(BOB), "wishes", "w1")));
+    await assertFails(getDoc(doc(as(MALLORY), "wishes", "w1")));
+  });
+
+  test("a wish can NOT be created by a client — only redeemWishCard may", async () => {
+    // A direct create used to skip the card-balance check entirely.
+    await assertFails(setDoc(doc(as(ALICE), "wishes", "w2"),
+      { fromUserId: ALICE, toUserId: BOB, text: "free wish" }));
+  });
+
+  test("only the receiver may mark a wish fulfilled, and nothing else", async () => {
+    await assertSucceeds(updateDoc(doc(as(BOB), "wishes", "w1"), { fulfilled: true }));
+    await assertFails(updateDoc(doc(as(ALICE), "wishes", "w1"), { fulfilled: true }));
+    await assertFails(updateDoc(doc(as(BOB), "wishes", "w1"), { text: "rewritten" }));
+  });
+});
+
+describe("reports and blocks", () => {
+  test("a user can file a report as themselves, within limits", async () => {
+    await assertSucceeds(setDoc(doc(as(ALICE), "reports", "r1"), {
+      reporterId: ALICE, targetType: "feedPost", targetId: "post1",
+      targetUserId: MALLORY, reason: "harassment", details: "rude", createdAt: new Date(),
+    }));
+    await assertFails(setDoc(doc(as(ALICE), "reports", "r2"), {
+      reporterId: BOB, targetType: "feedPost", targetId: "post1", reason: "spoofed",
+    }));
+    await assertFails(setDoc(doc(as(ALICE), "reports", "r3"), {
+      reporterId: ALICE, targetType: "everything", targetId: "x", reason: "bad type",
+    }));
+    await assertFails(setDoc(doc(as(ALICE), "reports", "r4"), {
+      reporterId: ALICE, targetType: "user", targetId: MALLORY, reason: "x".repeat(101),
+    }));
+  });
+
+  test("reports are never readable by clients", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "reports", "r1"),
+        { reporterId: ALICE, targetType: "user", targetId: MALLORY, reason: "spam" });
+    });
+    await assertFails(getDoc(doc(as(ALICE), "reports", "r1")));
+    await assertFails(getDocs(collection(as(MALLORY), "reports")));
+  });
+
+  test("a block list is readable by its owner only and never client-writable", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "blocks", ALICE), { blockedUserIds: [MALLORY] });
+    });
+    await assertSucceeds(getDoc(doc(as(ALICE), "blocks", ALICE)));
+    await assertFails(getDoc(doc(as(MALLORY), "blocks", ALICE)));
+    await assertFails(updateDoc(doc(as(ALICE), "blocks", ALICE), { blockedUserIds: [] }));
+    await assertFails(setDoc(doc(as(BOB), "blocks", BOB), { blockedUserIds: [ALICE] }));
+  });
+});
+
 describe("server-only collections", () => {
   test("idempotency keys are completely inaccessible to clients", async () => {
     await assertFails(getDoc(doc(as(ALICE), "idempotencyKeys", `${ALICE}_key1`)));
