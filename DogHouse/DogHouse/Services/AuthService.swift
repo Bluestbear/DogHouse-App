@@ -30,6 +30,10 @@ class AuthService: ObservableObject {
     @Published var partnerCode: String?
     /// Engagement nudges (Profile → Reminders). Server treats absent as on.
     @Published var remindersEnabled = true
+    /// A partner code that arrived through a pairing link
+    /// (https://doghouse-5e80e.web.app/pair/CODE). The pairing screens
+    /// pre-fill from it and clear it.
+    @Published var pendingPairCode: String?
     private var lastActivityWrite: Date?
 
     private var authStateListener: AuthStateDidChangeListenerHandle?
@@ -503,6 +507,29 @@ class AuthService: ObservableObject {
 
     /// Record that the live tour has been seen. A replay from Profile finds
     /// the flag already set and writes nothing.
+    /// Record acceptance of the current Terms of Use on the profile.
+    func acceptTerms() async throws {
+        #if DEBUG
+        if Self.isDemo {
+            userProfile?.termsAcceptedVersion = Legal.termsVersion
+            return
+        }
+        #endif
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        try await fs.usersCollection.document(uid).updateData([
+            "termsAcceptedVersion": Legal.termsVersion,
+            "termsAcceptedAt": Timestamp(date: Date()),
+        ])
+    }
+
+    /// Route an incoming URL. Returns true when it was a pairing link.
+    @discardableResult
+    func handle(url: URL) -> Bool {
+        guard let code = Legal.pairingCode(from: url) else { return false }
+        pendingPairCode = code
+        return true
+    }
+
     func markTourComplete() async {
         guard let uid = Auth.auth().currentUser?.uid,
               userProfile?.isTourComplete != true else { return }

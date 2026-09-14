@@ -110,6 +110,9 @@ struct FeedPostCard: View {
         post.reaction(of: feedService.userId)
     }
 
+    @State private var reportTarget: ReportTarget?
+    @State private var userToBlock: (id: String, name: String)?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Header: who sent whom
@@ -138,6 +141,7 @@ struct FeedPostCard: View {
                 Spacer()
 
                 statusBadge
+                moderationMenu
             }
 
             // Reason
@@ -178,6 +182,57 @@ struct FeedPostCard: View {
             }
         }
         .padding(.vertical, 6)
+        .sheet(isPresented: Binding(
+            get: { reportTarget != nil },
+            set: { if !$0 { reportTarget = nil } }
+        )) {
+            if let reportTarget {
+                ReportSheet(target: reportTarget,
+                            blockableUser: (post.senderId, post.senderName))
+            }
+        }
+        .alert("Block \(userToBlock?.name ?? "")?", isPresented: Binding(
+            get: { userToBlock != nil },
+            set: { if !$0 { userToBlock = nil } }
+        )) {
+            Button("Block", role: .destructive) {
+                guard let user = userToBlock else { return }
+                userToBlock = nil
+                Task { try? await ModerationService.shared.block(userId: user.id) }
+            }
+            Button("Cancel", role: .cancel) { userToBlock = nil }
+        } message: {
+            Text("You'll stop seeing their sendings and the couple friendship is removed. They aren't told.")
+        }
+    }
+
+    /// Report / block, required for anything other people wrote
+    /// (App Store Guideline 1.2). The reason text on a post is free text.
+    private var moderationMenu: some View {
+        Menu {
+            Button {
+                reportTarget = .feedPost(post)
+            } label: {
+                Label("Report", systemImage: "flag")
+            }
+            Button(role: .destructive) {
+                userToBlock = (post.senderId, post.senderName)
+            } label: {
+                Label("Block \(post.senderName)", systemImage: "hand.raised")
+            }
+            Button(role: .destructive) {
+                userToBlock = (post.receiverId, post.receiverName)
+            } label: {
+                Label("Block \(post.receiverName)", systemImage: "hand.raised")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var roastMenu: some View {

@@ -81,6 +81,9 @@ struct NameEntryView: View {
                             .padding(.horizontal, 24)
                     }
 
+                    LegalLinksText()
+                        .padding(.horizontal, 32)
+
                     Spacer(minLength: 40)
                 }
             }
@@ -94,6 +97,9 @@ struct NameEntryView: View {
         isSaving = true
         defer { isSaving = false }
         do {
+            // Continuing is acceptance of the Terms of Use (linked above),
+            // recorded before the name so the gate never shows this account.
+            try await authService.acceptTerms()
             try await authService.updateDisplayName(trimmedName)
             HapticService.shared.success()
             // The user-document listener picks the new name up and

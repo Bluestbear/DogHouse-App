@@ -60,10 +60,11 @@ class ShopService {
 
     // MARK: - Treat Earning
 
-    /// Claim treats for time spent at home. The server computes the amount
-    /// from event history; the client only passes the level-based rate.
-    func awardHomeTreats(treatsPerHour: Int) async throws {
-        try await cf.call("claimHomeTreats", ["treatsPerHour": treatsPerHour])
-        AnalyticsService.shared.log(.claimTreats, ["rate": treatsPerHour])
+    /// Claim treats for time spent at home. The server computes both the
+    /// hours and the room-level rate from event history; nothing the client
+    /// sends affects the amount.
+    func awardHomeTreats() async throws {
+        let result = try await cf.call("claimHomeTreats")
+        AnalyticsService.shared.log(.claimTreats, ["awarded": result["awarded"] as? Int ?? 0])
     }
 }

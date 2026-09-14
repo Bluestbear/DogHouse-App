@@ -14,6 +14,33 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .home
     @State private var showPermissionExplainer = false
     @State private var showWhatsNew = false
+    /// Accounts that predate the Terms of Use accept them once, before
+    /// anything else (a spotlight behind a sheet is invisible anyway).
+    private var showTermsGate: Bool {
+        guard let profile = authService.userProfile else { return false }
+        return !profile.hasAcceptedCurrentTerms
+    }
+
+    /// The sheets that can want the screen on launch.
+    ///
+    /// They are driven through ONE `.sheet(item:)` rather than one modifier
+    /// each: SwiftUI silently drops all but one sheet attached to the same
+    /// view, and an existing account with notifications still undecided
+    /// wants two at once. The one that must never be dropped is the terms
+    /// gate — a user who slips past it can post content they never agreed
+    /// to the rules for. Priority order is the presentation order: accepting
+    /// the terms makes this recompute and the next sheet takes its place.
+    private enum StartupSheet: Identifiable {
+        case terms, notifications, whatsNew
+        var id: Self { self }
+    }
+
+    private var startupSheet: StartupSheet? {
+        if showTermsGate { return .terms }
+        if showPermissionExplainer { return .notifications }
+        if showWhatsNew { return .whatsNew }
+        return nil
+    }
 
     // The live tour runs on top of these tabs. It starts once for new users
     // (tourComplete == false) after the permission explainer is out of the
@@ -73,8 +100,8 @@ struct MainTabView: View {
             selectedTab = .home
             Task { await authService.markTourComplete() }
         }
-        .onChange(of: showPermissionExplainer) { _, _ in maybeStartTour() }
-        .onChange(of: showWhatsNew) { _, _ in maybeStartTour() }
+        // The tour can only start once nothing is covering the screen.
+        .onChange(of: startupSheet) { _, _ in maybeStartTour() }
         .onChange(of: authService.userProfile?.isTourComplete) { _, _ in maybeStartTour() }
         // Notification taps route to the right tab
         .onChange(of: notificationService.pendingDestination) { _, destination in
@@ -99,8 +126,30 @@ struct MainTabView: View {
             }
             maybeStartTour()
         }
-        .sheet(isPresented: $showPermissionExplainer) {
-            NotificationPermissionView(notificationService: notificationService)
+        .sheet(item: .init(
+            get: { startupSheet },
+            set: { newValue in
+                // Only a dismissal comes back through here. Clear whichever
+                // sheet was showing; the terms gate clears itself by writing
+                // termsAcceptedVersion, so an attempted dismissal of it just
+                // re-presents — which is the point of a gate.
+                guard newValue == nil else { return }
+                switch startupSheet {
+                case .notifications: showPermissionExplainer = false
+                case .whatsNew: showWhatsNew = false
+                case .terms, .none: break
+                }
+            }
+        )) { sheet in
+            switch sheet {
+            case .terms:
+                TermsGateView()
+                    .environmentObject(authService)
+            case .notifications:
+                NotificationPermissionView(notificationService: notificationService)
+            case .whatsNew:
+                WhatsNewView()
+            }
         }
         // One-time "what's new" for accounts that predate this update.
         // New users get the same info in the onboarding tour instead.
@@ -113,9 +162,6 @@ struct MainTabView: View {
                 showWhatsNew = true
             }
         }
-        .sheet(isPresented: $showWhatsNew) {
-            WhatsNewView()
-        }
     }
 
     /// Start the tour for a user who hasn't seen it, but only once no sheet
@@ -124,8 +170,7 @@ struct MainTabView: View {
     private func maybeStartTour() {
         guard !tourStartedThisSession,
               !tour.isActive,
-              !showPermissionExplainer,
-              !showWhatsNew,
+              startupSheet == nil,
               let profile = authService.userProfile,
               !profile.isTourComplete else { return }
         tourStartedThisSession = true

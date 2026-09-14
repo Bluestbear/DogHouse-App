@@ -19,7 +19,9 @@ struct DogHouseApp: App {
                 // belongs on the scene, not on AppDelegate: a SwiftUI app runs
                 // under the UIScene lifecycle, where the app delegate's
                 // application(_:open:options:) is never called.
+                // Universal links (…/pair/CODE) arrive here too.
                 .onOpenURL { url in
+                    if authService.handle(url: url) { return }
                     _ = GIDSignIn.sharedInstance.handle(url)
                 }
         }

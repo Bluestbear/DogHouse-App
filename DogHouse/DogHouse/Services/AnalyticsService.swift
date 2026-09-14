@@ -70,6 +70,10 @@ final class AnalyticsService: ObservableObject {
 
         // Did the nudges actually bring anyone back?
         case pushOpened        = "push_opened"
+
+        // Moderation
+        case reportContent     = "report_content"
+        case blockUser         = "block_user"
     }
 
     // MARK: - Logging

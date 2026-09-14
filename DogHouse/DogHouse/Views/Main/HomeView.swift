@@ -183,7 +183,8 @@ struct HomeView: View {
                         PhotoDashResultCard(
                             dash: result,
                             iWon: result.winnerId == doghouseService.userId,
-                            partnerName: partnerName
+                            partnerName: partnerName,
+                            partnerId: authService.userProfile?.partnerId
                         )
                     }
 
@@ -926,7 +927,7 @@ struct HomeView: View {
 
         isAwardingTreats = true
         Task {
-            try? await shopService.awardHomeTreats(treatsPerHour: currentRoomLevel.treatsPerHour)
+            try? await shopService.awardHomeTreats()
             isAwardingTreats = false
         }
     }

@@ -68,7 +68,7 @@ struct WaitingForPartnerView: View {
                                     .clipShape(Capsule())
                             }
 
-                            ShareLink(item: "Join me on DogHouse! Enter my partner code: \(myCode)") {
+                            ShareLink(item: Legal.pairingLink(code: myCode), message: Text("Join me on DogHouse! Tap the link to pair, or enter my code: \(myCode)")) {
                                 Label("Share", systemImage: "square.and.arrow.up")
                                     .font(.dhCaptionBold)
                                     .padding(.horizontal, 16)
@@ -166,6 +166,12 @@ struct WaitingForPartnerView: View {
                 }
             }
             .onAppear { pulsate = true }
+            // A pairing link tapped before or during onboarding lands here.
+            .onChange(of: authService.pendingPairCode, initial: true) { _, code in
+                guard let code else { return }
+                partnerCode = code
+                authService.pendingPairCode = nil
+            }
         }
     }
 

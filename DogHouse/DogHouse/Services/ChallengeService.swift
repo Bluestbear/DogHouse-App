@@ -144,27 +144,37 @@ class ChallengeService: ObservableObject {
     }
 
     /// First tap wins: creates this year's race doc with a deterministic id.
-    /// Rules forbid updating a completed challenge, so the second partner's
-    /// attempt fails — the race can only be won once.
+    /// The existence check and the write run in one transaction, so two
+    /// taps a few milliseconds apart can't both read "no doc yet" and race
+    /// each other to the create; the loser simply sees the winner's doc.
+    /// (Rules also forbid updating a completed challenge, as a backstop.)
     func wishHappyAnniversary() async throws {
         let (coupleKey, partnerId) = try requireCouple()
         let year = Calendar.current.component(.year, from: Date())
-        let docId = "anniv_\(coupleKey)_\(year)"
-        let doc = try await fs.challengesCollection.document(docId).getDocument()
-        guard !doc.exists else { return } // partner beat you to it
-
-        try await fs.challengesCollection.document(docId).setData([
-            "coupleKey": coupleKey,
-            "type": "anniversary",
-            "title": "Anniversary Race \(year)",
-            "prompt": "First to wish a happy anniversary wins!",
-            "createdBy": userId,
-            "participants": [userId, partnerId],
-            "status": "completed",
-            "createdAt": Timestamp(date: Date()),
-            "winnerId": userId,
-            "completedAt": Timestamp(date: Date())
-        ])
+        let ref = fs.challengesCollection.document("anniv_\(coupleKey)_\(year)")
+        let userId = self.userId
+        _ = try await fs.db.runTransaction { transaction, errorPointer in
+            do {
+                let doc = try transaction.getDocument(ref)
+                guard !doc.exists else { return nil } // partner beat you to it
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            transaction.setData([
+                "coupleKey": coupleKey,
+                "type": "anniversary",
+                "title": "Anniversary Race \(year)",
+                "prompt": "First to wish a happy anniversary wins!",
+                "createdBy": userId,
+                "participants": [userId, partnerId],
+                "status": "completed",
+                "createdAt": Timestamp(date: Date()),
+                "winnerId": userId,
+                "completedAt": Timestamp(date: Date())
+            ], forDocument: ref)
+            return nil
+        }
     }
 
     // MARK: - Quiz

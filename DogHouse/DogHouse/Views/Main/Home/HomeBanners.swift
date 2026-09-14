@@ -81,6 +81,8 @@ struct PhotoDashResultCard: View {
     let dash: Challenge
     let iWon: Bool
     let partnerName: String
+    var partnerId: String? = nil
+    @State private var showReport = false
 
     /// Decoded once when the photo arrives, not on every redraw. Turning a
     /// base64 string into a UIImage inside `body` re-ran the decode on every
@@ -104,9 +106,27 @@ struct PhotoDashResultCard: View {
                     .frame(height: 180)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
             }
-            Text(dash.prompt)
-                .font(.dhCaption)
-                .foregroundStyle(.secondary)
+            HStack {
+                Text(dash.prompt)
+                    .font(.dhCaption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                // The photo is the partner's; App Store Guideline 1.2 wants a
+                // way to report any photo someone else took.
+                if !iWon, let partnerId {
+                    Button {
+                        showReport = true
+                    } label: {
+                        Label("Report", systemImage: "flag")
+                            .font(.dhCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showReport) {
+                        ReportSheet(target: .photo(challengeId: dash.id, ownerId: partnerId, ownerName: partnerName))
+                    }
+                }
+            }
         }
         .padding(14)
         .background(Color.freedomGreen.opacity(0.10))

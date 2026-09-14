@@ -23,6 +23,17 @@
 	     will complete in the browser and never return to the app. -->
 	<key>CFBundleURLTypes</key>
 	<array>
+		<!-- doghouse://pair/CODE — used by the pairing web page's "Open in
+		     DogHouse" button; universal links (applinks in the entitlements)
+		     are the primary path. -->
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.Harrison.DogHouse.pairing</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>doghouse</string>
+			</array>
+		</dict>
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>

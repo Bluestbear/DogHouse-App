@@ -30,6 +30,8 @@ struct UserProfile: Codable, Identifiable {
     var equippedItemIds: [String: String]? // CosmeticCategory.rawValue -> itemId
     var lastTreatAward: Date?
     var wishCards: Int?
+    /// Which Terms of Use version this account accepted (Legal.termsVersion).
+    var termsAcceptedVersion: String?
 
     /// Whether this user currently has active immunity from voting
     var hasImmunity: Bool {
@@ -59,6 +61,7 @@ struct UserProfile: Codable, Identifiable {
     var hasSelectedAvatar: Bool { avatarId != nil }
     var isTourComplete: Bool { tourComplete ?? false }
     var isOnboardingComplete: Bool { onboardingComplete ?? false }
+    var hasAcceptedCurrentTerms: Bool { termsAcceptedVersion == Legal.termsVersion }
 }
 
 // MARK: - Private Data

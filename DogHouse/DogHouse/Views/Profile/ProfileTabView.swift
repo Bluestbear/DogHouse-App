@@ -419,8 +419,18 @@ struct ProfileTabView: View {
                 AnalyticsService.shared.isEnabled = newValue
             }
 
-            Link(destination: URL(string: "https://doghouse-5e80e.web.app/privacy.html")!) {
-                Label("Privacy Policy", systemImage: "hand.raised.fill")
+            NavigationLink {
+                BlockedUsersView()
+            } label: {
+                Label("Blocked People", systemImage: "hand.raised.slash.fill")
+            }
+
+            Link(destination: Legal.privacyURL) {
+                Label("Privacy Policy", systemImage: "lock.shield.fill")
+            }
+
+            Link(destination: Legal.termsURL) {
+                Label("Terms of Use", systemImage: "doc.text.fill")
             }
 
             Button(role: .destructive) {

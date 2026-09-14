@@ -55,7 +55,7 @@ struct PairingView: View {
                             .tint(Color.dogHouseBrown)
 
                             if let code = authService.partnerCode {
-                                ShareLink(item: "Join me on DogHouse! My code is: \(code)") {
+                                ShareLink(item: Legal.pairingLink(code: code), message: Text("Join me on DogHouse! Tap the link to pair, or enter my code: \(code)")) {
                                     Label("Share", systemImage: "square.and.arrow.up")
                                         .font(.subheadline.bold())
                                 }
@@ -142,6 +142,11 @@ struct PairingView: View {
                     }
                     .font(.subheadline)
                 }
+            }
+            .onChange(of: authService.pendingPairCode, initial: true) { _, code in
+                guard let code else { return }
+                partnerCode = code
+                authService.pendingPairCode = nil
             }
         }
     }

@@ -19,7 +19,14 @@ struct FriendsTabView: View {
     @State private var showError = false
     @State private var errorText = ""
     @State private var coupleToRemove: FriendCouple?
+    @State private var coupleToBlock: FriendCouple?
     @ObservedObject private var tour = TourCoordinator.shared
+    @ObservedObject private var moderation = ModerationService.shared
+
+    /// The feed minus anything from someone I've blocked.
+    private var visiblePosts: [FeedPost] {
+        feedService.posts.filter { !moderation.isHidden($0) }
+    }
 
     var body: some View {
         NavigationStack {
@@ -35,14 +42,14 @@ struct FriendsTabView: View {
                 }
 
                 // Friends feed — public sendings
-                if !feedService.posts.isEmpty {
+                if !visiblePosts.isEmpty {
                     feedSection
                 }
 
                 // Top Dog — most time served among friends this week
-                if feedService.posts.count > 1 {
+                if visiblePosts.count > 1 {
                     Section {
-                        TopDogLeaderboard(posts: feedService.posts)
+                        TopDogLeaderboard(posts: visiblePosts)
                     } header: {
                         Text("Top Dog 🏆 (this week)")
                     }
@@ -61,6 +68,27 @@ struct FriendsTabView: View {
             // unavailable at that instant.
             .task(id: authService.userProfile?.partnerId) {
                 friendService.configure(partnerId: authService.userProfile?.partnerId)
+            }
+            .task(id: authService.userProfile?.id) {
+                moderation.configure(userId: authService.userProfile?.id)
+            }
+            .alert("Block this couple?", isPresented: .init(
+                get: { coupleToBlock != nil },
+                set: { if !$0 { coupleToBlock = nil } }
+            )) {
+                Button("Block", role: .destructive) {
+                    guard let couple = coupleToBlock else { return }
+                    coupleToBlock = nil
+                    Task {
+                        for member in couple.members {
+                            try? await moderation.block(userId: member.id)
+                        }
+                        await friendService.refresh()
+                    }
+                }
+                Button("Cancel", role: .cancel) { coupleToBlock = nil }
+            } message: {
+                Text("Both of them are blocked and the friendship is removed. They aren't told, and they can't re-add you.")
             }
             .alert("Remove this couple?", isPresented: .init(
                 get: { coupleToRemove != nil },
@@ -105,7 +133,7 @@ struct FriendsTabView: View {
 
     private var feedSection: some View {
         Section {
-            ForEach(feedService.posts) { post in
+            ForEach(visiblePosts) { post in
                 FeedPostCard(
                     post: post,
                     feedService: feedService,
@@ -206,6 +234,12 @@ struct FriendsTabView: View {
                             } label: {
                                 Label("Remove", systemImage: "person.2.slash")
                             }
+                            Button {
+                                coupleToBlock = couple
+                            } label: {
+                                Label("Block", systemImage: "hand.raised.fill")
+                            }
+                            .tint(.orange)
                         }
                 }
             }
