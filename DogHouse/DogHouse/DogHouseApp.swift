@@ -30,8 +30,24 @@ struct DogHouseApp: App {
 
 struct RootView: View {
     @EnvironmentObject var authService: AuthService
+    /// The icon-to-fullscreen dog face shown while the app boots. It covers
+    /// whatever RootView resolves to underneath, so the real first screen is
+    /// already laid out by the time the face slides away.
+    @State private var showLaunchSplash = true
 
     var body: some View {
+        ZStack {
+            content
+            if showLaunchSplash {
+                LaunchSplashView(isReady: authService.isAuthInitialized) {
+                    showLaunchSplash = false
+                }
+                .zIndex(1)
+            }
+        }
+    }
+
+    private var content: some View {
         Group {
             if !authService.isAuthInitialized {
                 // Wait for Firebase Auth to resolve before showing any UI

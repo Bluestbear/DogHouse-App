@@ -13,7 +13,36 @@
                     <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
                         <rect key="frame" x="0.0" y="0.0" width="375" height="667"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                        <color key="backgroundColor" red="1" green="0.92" blue="0.80" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                        <subviews>
+                            <!-- Full-bleed Welcome gradient, the avatar's head centred at 0.545 of the
+                                 screen width (LaunchHead is 1280x1120 px, avatar units -32..32 x -35..21),
+                                 and the wordmark (a 3x image, intrinsic size) 28pt above the safe area.
+                                 Mirrors LaunchSplashView and Design/make-app-icon-dog.py. -->
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleToFill" image="LaunchFur" translatesAutoresizingMaskIntoConstraints="NO" id="fur-Img-001">
+                                <rect key="frame" x="0.0" y="0.0" width="375" height="667"/>
+                            </imageView>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" image="LaunchHead" translatesAutoresizingMaskIntoConstraints="NO" id="head-Img-001">
+                                <rect key="frame" x="85" y="244" width="204" height="179"/>
+                                <constraints>
+                                    <constraint firstAttribute="height" secondItem="head-Img-001" secondAttribute="width" multiplier="1120:1280" id="head-AR-001"/>
+                                </constraints>
+                            </imageView>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="center" image="LaunchWordmark" translatesAutoresizingMaskIntoConstraints="NO" id="mark-Img-001">
+                                <rect key="frame" x="98" y="596" width="180" height="43"/>
+                            </imageView>
+                        </subviews>
+                        <color key="backgroundColor" red="1.0" green="0.639" blue="0.2" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                        <constraints>
+                            <constraint firstItem="fur-Img-001" firstAttribute="top" secondItem="Ze5-6b-2t3" secondAttribute="top" id="fur-T-001"/>
+                            <constraint firstItem="fur-Img-001" firstAttribute="bottom" secondItem="Ze5-6b-2t3" secondAttribute="bottom" id="fur-B-001"/>
+                            <constraint firstItem="fur-Img-001" firstAttribute="leading" secondItem="Ze5-6b-2t3" secondAttribute="leading" id="fur-L-001"/>
+                            <constraint firstItem="fur-Img-001" firstAttribute="trailing" secondItem="Ze5-6b-2t3" secondAttribute="trailing" id="fur-R-001"/>
+                            <constraint firstItem="head-Img-001" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="head-CX-001"/>
+                            <constraint firstItem="head-Img-001" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" id="head-CY-001"/>
+                            <constraint firstItem="head-Img-001" firstAttribute="width" secondItem="Ze5-6b-2t3" secondAttribute="width" multiplier="0.545" id="head-W-001"/>
+                            <constraint firstItem="mark-Img-001" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="mark-CX-001"/>
+                            <constraint firstItem="6Tk-OE-BBY" firstAttribute="bottom" secondItem="mark-Img-001" secondAttribute="bottom" constant="28" id="mark-B-001"/>
+                        </constraints>
                         <viewLayoutGuide key="safeArea" id="6Tk-OE-BBY"/>
                     </view>
                 </viewController>
@@ -22,4 +51,9 @@
             <point key="canvasLocation" x="53" y="375"/>
         </scene>
     </scenes>
+    <resources>
+        <image name="LaunchFur" width="1" height="512"/>
+        <image name="LaunchHead" width="1280" height="1120"/>
+        <image name="LaunchWordmark" width="180" height="43"/>
+    </resources>
 </document>

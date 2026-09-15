@@ -22,6 +22,14 @@ struct AvatarView: View {
     /// looks down. The Welcome mascot uses it to watch the field being typed.
     var gaze: CGFloat = 0
 
+    /// Draw only the head (ears, face, collar): no tail, body or paws. The
+    /// launch splash shows the head alone on the brand gradient.
+    var headOnly: Bool = false
+
+    /// When set, the eyelids follow this instead of the random blink timer,
+    /// so an owner can blink the dog on cue (the launch splash blinks once).
+    var blinkOverride: Bool? = nil
+
     @State private var isBlinking = false
     @State private var wag = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -36,20 +44,20 @@ struct AvatarView: View {
 
     var body: some View {
         ZStack {
-            if showsTail { tailView }
+            if showsTail && !headOnly { tailView }
 
             // Ears sit behind head
             earView(isLeft: true)
             earView(isLeft: false)
 
-            bodyView
+            if !headOnly { bodyView }
 
             // Head drawn on top of ears
             headShape
 
             faceView
 
-            pawsView
+            if !headOnly { pawsView }
 
             collarView
 
@@ -191,7 +199,7 @@ struct AvatarView: View {
             Rectangle()
                 .fill(avatar.primaryColor)
                 .frame(width: 15 * scale, height: 15 * scale)
-                .offset(y: isBlinking ? 0 : -15 * scale)
+                .offset(y: (blinkOverride ?? isBlinking) ? 0 : -15 * scale)
         }
         .frame(width: 14 * scale, height: 14 * scale)
         .clipShape(Circle())
