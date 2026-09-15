@@ -21,7 +21,6 @@ struct ProfileTabView: View {
     @State private var unpairError: String?
     @State private var soundEnabled = SoundService.shared.isEnabled
     @State private var hapticEnabled = HapticService.shared.isEnabled
-    @State private var analyticsEnabled = AnalyticsService.shared.isEnabled
     @State private var showAppleRevocation = false
     @ObservedObject private var tour = TourCoordinator.shared
     /// Collapsed by default: once a couple has been at it for a while the
@@ -412,22 +411,13 @@ struct ProfileTabView: View {
 
     private var accountSection: some View {
         Section {
-            Toggle(isOn: $analyticsEnabled) {
-                Label("Share Usage Data", systemImage: "chart.bar.fill")
-            }
-            .onChange(of: analyticsEnabled) { _, newValue in
-                AnalyticsService.shared.isEnabled = newValue
-            }
-
             NavigationLink {
                 BlockedUsersView()
             } label: {
                 Label("Blocked People", systemImage: "hand.raised.slash.fill")
             }
 
-            Link(destination: Legal.privacyURL) {
-                Label("Privacy Policy", systemImage: "lock.shield.fill")
-            }
+            PrivacyDisclosure()
 
             Link(destination: Legal.termsURL) {
                 Label("Terms of Use", systemImage: "doc.text.fill")
