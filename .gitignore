@@ -86,3 +86,10 @@ DogHouse/functions/lib/
 
 # Local archives
 build/
+
+# Claude Code local config
+.claude/
+
+# VS Code local config
+.vscode/
+*.code-workspace
