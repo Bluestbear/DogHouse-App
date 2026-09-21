@@ -142,6 +142,7 @@ class AuthService: ObservableObject {
                     // Ties a crash report to an account without logging any
                     // personal data — the uid is opaque.
                     Crashlytics.crashlytics().setUserID(user.uid)
+                    AnalyticsService.shared.setUser(user.uid)
                     self.listenToUserDocument(userId: user.uid)
                     self.listenToPrivateDocument(userId: user.uid)
                     // Purchases must be attributed to the Firebase uid — the
@@ -149,6 +150,7 @@ class AuthService: ObservableObject {
                     Task { await PurchaseService.shared.login(uid: user.uid) }
                 } else {
                     Crashlytics.crashlytics().setUserID("")
+                    AnalyticsService.shared.setUser(nil)
                     Task { await PurchaseService.shared.logOut() }
                     self.isAuthenticated = false
                     self.userProfile = nil
@@ -218,7 +220,7 @@ class AuthService: ObservableObject {
     /// is product analytics, not app functionality, unlike `lastActiveAt`
     /// which drives the engagement nudges they can toggle separately.
     private func recordSessionIfNew(uid: String) async {
-        guard AnalyticsService.shared.isEnabled else { return }
+        guard AnalyticsService.shared.isCollecting else { return }
         let defaults = UserDefaults.standard
         let key = "lastSessionStart"
         let previous = defaults.object(forKey: key) as? Date

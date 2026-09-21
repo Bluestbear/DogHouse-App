@@ -28,9 +28,31 @@ final class AnalyticsService: ObservableObject {
     @Published var isEnabled: Bool {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: "analyticsEnabled")
-            Analytics.setAnalyticsCollectionEnabled(isEnabled)
+            apply()
         }
     }
+
+    /// Development runs never reach the reports. Every simulator install gets
+    /// a fresh app-instance id, so one afternoon of reinstalling to test the
+    /// launch splash showed up in the console as eighteen "new users". Debug
+    /// builds stay silent too, unless launched with `-FIRDebugEnabled`: those
+    /// events go to DebugView, which Firebase keeps out of the aggregate
+    /// reports, so the verification workflow still works.
+    static let isDevelopmentRun: Bool = {
+        if ProcessInfo.processInfo.arguments.contains("-FIRDebugEnabled") { return false }
+        #if DEBUG || targetEnvironment(simulator)
+        return true
+        #else
+        return false
+        #endif
+    }()
+
+    /// The user's choice and the build's eligibility, combined. Every call
+    /// into the SDK checks this, never `isEnabled` alone.
+    var isCollecting: Bool { isEnabled && !Self.isDevelopmentRun }
+
+    /// The signed-in account, so an opt-in after the fact can re-attach it.
+    private var currentUserID: String?
 
     private init() {
         self.isEnabled = UserDefaults.standard.object(forKey: "analyticsEnabled") as? Bool ?? true
@@ -40,7 +62,22 @@ final class AnalyticsService: ObservableObject {
     /// Info.plist so that nothing is gathered before this runs; this call is
     /// what actually turns it on for users who have not opted out.
     func start() {
-        Analytics.setAnalyticsCollectionEnabled(isEnabled)
+        apply()
+    }
+
+    private func apply() {
+        Analytics.setAnalyticsCollectionEnabled(isCollecting)
+        Analytics.setUserID(isCollecting ? currentUserID : nil)
+    }
+
+    /// Ties this install to the account, so the console counts people rather
+    /// than installs: without it every reinstall, and every device a couple
+    /// shares an account across, is a brand-new "user". The uid is opaque and
+    /// is the only thing set here — never a name or an email. Pass nil on
+    /// sign-out. Cleared automatically when the user opts out.
+    func setUser(_ uid: String?) {
+        currentUserID = uid
+        Analytics.setUserID(isCollecting ? uid : nil)
     }
 
     /// Every event this app sends. An enum rather than string literals, so a
@@ -79,13 +116,13 @@ final class AnalyticsService: ObservableObject {
     // MARK: - Logging
 
     func log(_ event: Event, _ parameters: [String: Any] = [:]) {
-        guard isEnabled else { return }
+        guard isCollecting else { return }
         Analytics.logEvent(event.rawValue, parameters: parameters.isEmpty ? nil : parameters)
     }
 
     /// SwiftUI has no automatic screen tracking, so the tabs report themselves.
     func logScreen(_ name: String) {
-        guard isEnabled else { return }
+        guard isCollecting else { return }
         Analytics.logEvent(AnalyticsEventScreenView, parameters: [
             AnalyticsParameterScreenName: name
         ])
@@ -94,7 +131,7 @@ final class AnalyticsService: ObservableObject {
     /// A coarse segment for the console's comparison filters. Never the uid,
     /// never a name — only whether this account has reached the paired state.
     func setPairedProperty(_ paired: Bool) {
-        guard isEnabled else { return }
+        guard isCollecting else { return }
         Analytics.setUserProperty(paired ? "paired" : "solo", forName: "pairing_state")
     }
 }
