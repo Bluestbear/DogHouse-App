@@ -268,6 +268,19 @@ class DoghouseService: ObservableObject {
     /// Send partner to the doghouse via the server (grace/immunity are
     /// validated and deducted server-side; public sends create the feed post).
     func sendToDoghouse(reason: String, suggestion: String?, isPublic: Bool = false) async throws {
+        #if DEBUG
+        // Demo mode has no account: land the send locally so the send flow
+        // and its animation can be tried on the sim without touching Firebase.
+        if AuthService.isDemo {
+            try? await Task.sleep(for: .milliseconds(400))
+            partnerDoghouseEvent = DoghouseEvent(
+                id: "demo_sent", senderId: "demo_me", receiverId: "demo_partner",
+                reason: reason, suggestion: suggestion,
+                startedAt: Date(), endedAt: nil, isActive: true
+            )
+            return
+        }
+        #endif
         guard let partnerId, partnerId != "skipped" else { return }
         try await CloudFunctions.shared.call("sendToDoghouse", [
             "reason": reason,
@@ -293,6 +306,12 @@ class DoghouseService: ObservableObject {
     /// grants the freed dog immunity, awards redemption treats, and closes any
     /// public feed post — all atomically with admin privileges.
     func releasePartner(releasedBy: String = "sender") async throws {
+        #if DEBUG
+        if AuthService.isDemo {
+            partnerDoghouseEvent = nil
+            return
+        }
+        #endif
         guard let event = partnerDoghouseEvent else { return }
         try await CloudFunctions.shared.call("releasePartner", [
             "eventId": event.id,
