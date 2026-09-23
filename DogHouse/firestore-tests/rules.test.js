@@ -116,6 +116,40 @@ describe("users", () => {
     await assertFails(updateDoc(doc(as(ALICE), "users", ALICE), { partnerCode: "LEAK01" }));
   });
 
+  // The exact shape AuthService.bootstrapProfileIfNeeded writes (1.1 (5)).
+  const bootstrap = (uid) => ({
+    id: uid, displayName: "Newbie", friendIds: [], createdAt: new Date(),
+    graceCharges: 3, lastGraceRecharge: new Date(),
+    tourComplete: false, onboardingComplete: false,
+  });
+
+  test("a new account can create its profile in the shape the app writes", async () => {
+    await assertSucceeds(setDoc(doc(as("uidNew"), "users", "uidNew"), bootstrap("uidNew")));
+  });
+
+  test("a new profile cannot be born holding economy fields or a partner", async () => {
+    for (const extra of [
+      { treats: 99999 }, { wishCards: 50 }, { immunityUntil: new Date(Date.now() + 1e10) },
+      { ownedItemIds: ["hat_crown"] }, { lastTreatAward: new Date(0) }, { graceCharges: 99 },
+      { partnerId: ALICE }, { fcmToken: "t" }, { partnerCode: "ABC123" },
+    ]) {
+      await assertFails(setDoc(doc(as("uidNew"), "users", "uidNew"),
+        { ...bootstrap("uidNew"), ...extra }));
+    }
+  });
+
+  test("owner cannot backdate createdAt to buy a higher treat rate", async () => {
+    await assertFails(updateDoc(doc(as(ALICE), "users", ALICE), { createdAt: new Date(0) }));
+  });
+
+  test("owner can still set the fields the app updates", async () => {
+    await assertSucceeds(updateDoc(doc(as(ALICE), "users", ALICE), {
+      displayName: "Al", tourComplete: true, onboardingComplete: true,
+      termsAcceptedVersion: "1", termsAcceptedAt: new Date(),
+    }));
+    await assertSucceeds(updateDoc(doc(as(ALICE), "users", ALICE), { partnerId: deleteField() }));
+  });
+
   test("the migration may REMOVE legacy secrets", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await updateDoc(doc(ctx.firestore(), "users", ALICE), {
@@ -151,6 +185,29 @@ describe("users/{uid}/private/data", () => {
   test("pairing code is immutable once issued", async () => {
     await assertFails(updateDoc(
       doc(as(ALICE), "users", ALICE, "private", "data"), { partnerCode: "ZZZ999" }));
+  });
+});
+
+// ───────────────────────── pairing codes ─────────────────────────
+
+describe("partnerCodes", () => {
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "partnerCodes", "ABC123"), { userId: ALICE });
+    });
+  });
+
+  test("a code can be looked up by id (pairing in 1.1 (5))", async () => {
+    await assertSucceeds(getDoc(doc(as(MALLORY), "partnerCodes", "ABC123")));
+  });
+
+  test("NOBODY can list the codes — that is every code plus its uid", async () => {
+    await assertFails(getDocs(collection(as(MALLORY), "partnerCodes")));
+  });
+
+  test("a code can only be claimed for yourself", async () => {
+    await assertSucceeds(setDoc(doc(as(MALLORY), "partnerCodes", "MAL234"), { userId: MALLORY }));
+    await assertFails(setDoc(doc(as(MALLORY), "partnerCodes", "MAL345"), { userId: ALICE }));
   });
 });
 
@@ -264,6 +321,47 @@ describe("onboardingTasks", () => {
     await assertSucceeds(getDoc(doc(as(BOB), "onboardingTasks", COUPLE_KEY)));
   });
 
+  // user1 is the lower uid (OnboardingService.sortedIds): here ALICE.
+  const ob = () => doc(as(ALICE), "onboardingTasks", COUPLE_KEY);
+  const obBob = () => doc(as(BOB), "onboardingTasks", COUPLE_KEY);
+  const header = { id: COUPLE_KEY, coupleId: COUPLE_KEY, user1Id: ALICE, user2Id: BOB };
+  const finalTasks = [{ id: "t1", title: "Dishes", suggestedBy: ALICE, isAppSuggestion: false }];
+
+  test("the whole negotiation, as the app writes it, succeeds", async () => {
+    const tasks = [{ id: "t1", title: "Dishes" }];
+    await assertSucceeds(setDoc(ob(), { ...header, user1Tasks: tasks, user1Submitted: true }, { merge: true }));
+    await assertSucceeds(setDoc(obBob(), { ...header, user2Tasks: tasks, user2Submitted: true }, { merge: true }));
+    await assertSucceeds(setDoc(ob(), { ...header, user1Strikes: [], user1ReviewComplete: true }, { merge: true }));
+    await assertSucceeds(setDoc(obBob(), { ...header, user2Strikes: [], user2ReviewComplete: true }, { merge: true }));
+    await assertSucceeds(setDoc(ob(), { ...header, finalTasks }, { merge: true }));
+    // The partner computes the identical list; rewriting the same bytes is fine.
+    await assertSucceeds(setDoc(obBob(), { ...header, finalTasks }, { merge: true }));
+    await assertSucceeds(setDoc(ob(), { ...header, user1Confirmed: true }, { merge: true }));
+    await assertSucceeds(setDoc(obBob(), { ...header, user2Confirmed: true }, { merge: true }));
+  });
+
+  test("a partner cannot submit or confirm for the other half", async () => {
+    await assertFails(setDoc(obBob(), { ...header, user1Confirmed: true }, { merge: true }));
+    await assertFails(setDoc(obBob(), { ...header, user1Submitted: true, user1Tasks: [] }, { merge: true }));
+    await assertFails(setDoc(ob(), { ...header, user2Confirmed: true }, { merge: true }));
+  });
+
+  test("the final list needs both reviews and is write-once", async () => {
+    await assertFails(setDoc(ob(), { ...header, finalTasks }, { merge: true }));
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "onboardingTasks", COUPLE_KEY), {
+        ...header, user1ReviewComplete: true, user2ReviewComplete: true, finalTasks,
+      });
+    });
+    await assertFails(setDoc(obBob(), {
+      ...header, finalTasks: [{ id: "x", title: "Alice does everything", suggestedBy: "app", isAppSuggestion: true }],
+    }, { merge: true }));
+  });
+
+  test("the header must name this couple", async () => {
+    await assertFails(setDoc(ob(), { ...header, user1Id: MALLORY }, { merge: true }));
+  });
+
   test("an outsider cannot read or fabricate a couple's task doc", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), "onboardingTasks", COUPLE_KEY), {
@@ -353,6 +451,29 @@ describe("feedPosts", () => {
   test("audience member cannot react on someone else's behalf", async () => {
     await assertFails(updateDoc(doc(as(MALLORY), "feedPosts", "post1"),
       { [`reactions.${ALICE}`]: "dog" }));
+  });
+
+  test("a canned roast can be set and cleared", async () => {
+    await assertSucceeds(updateDoc(doc(as(MALLORY), "feedPosts", "post1"),
+      { [`roasts.${MALLORY}`]: "Guilty as charged 🐕‍🦺" }));
+    await assertSucceeds(updateDoc(doc(as(MALLORY), "feedPosts", "post1"),
+      { [`roasts.${MALLORY}`]: deleteField() }));
+  });
+
+  test("a roast cannot carry an essay onto the dog's lock screen", async () => {
+    await assertFails(updateDoc(doc(as(MALLORY), "feedPosts", "post1"),
+      { [`roasts.${MALLORY}`]: "x".repeat(61) }));
+    await assertFails(updateDoc(doc(as(MALLORY), "feedPosts", "post1"),
+      { [`roasts.${MALLORY}`]: { nested: true } }));
+  });
+
+  test("a reaction is one of the two kinds; toggling off is allowed", async () => {
+    await assertFails(updateDoc(doc(as(MALLORY), "feedPosts", "post1"),
+      { [`reactions.${MALLORY}`]: "anything else" }));
+    await assertSucceeds(updateDoc(doc(as(MALLORY), "feedPosts", "post1"),
+      { [`reactions.${MALLORY}`]: "back" }));
+    await assertSucceeds(updateDoc(doc(as(MALLORY), "feedPosts", "post1"),
+      { [`reactions.${MALLORY}`]: deleteField() }));
   });
 
   test("audience member cannot rewrite the post itself", async () => {
@@ -445,6 +566,27 @@ describe("voteEvents", () => {
       { endsAt: new Date() }));
   });
 
+  test("a vote cannot be changed once cast", async () => {
+    await assertSucceeds(updateDoc(doc(as(MALLORY), "voteEvents", "vote1"),
+      { [`votes.${MALLORY}`]: CAROL }));
+    await assertFails(updateDoc(doc(as(MALLORY), "voteEvents", "vote1"),
+      { [`votes.${MALLORY}`]: BOB }));
+    await assertFails(updateDoc(doc(as(MALLORY), "voteEvents", "vote1"),
+      { [`votes.${MALLORY}`]: deleteField() }));
+  });
+
+  test("no votes after endsAt, even before the resolver has run", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "voteEvents", "vote3"), {
+        type: "joint_doghouse", status: "active",
+        doghousedUserIds: [BOB, CAROL], audienceIds: [ALICE, BOB, MALLORY, CAROL],
+        votes: {}, startedAt: new Date(), endsAt: new Date(Date.now() - 1000),
+      });
+    });
+    await assertFails(updateDoc(doc(as(MALLORY), "voteEvents", "vote3"),
+      { [`votes.${MALLORY}`]: CAROL }));
+  });
+
   test("no votes once the vote has closed", async () => {
     await assertFails(updateDoc(doc(as(MALLORY), "voteEvents", "vote2"),
       { [`votes.${MALLORY}`]: CAROL }));
@@ -486,6 +628,94 @@ describe("challenges", () => {
 
   test("an outsider cannot read the challenge", async () => {
     await assertFails(getDoc(doc(as(MALLORY), "challenges", "quiz1")));
+  });
+
+  // The anniversary race gets this year's deterministic doc before creating
+  // it. A rule that dereferences resource.data denies that get on a missing
+  // doc, which made the race unwinnable (QA-055, 2026-09-22).
+  test("a participant can check whether this year's anniversary race exists yet", async () => {
+    await assertSucceeds(getDoc(doc(as(ALICE), "challenges", `anniv_${COUPLE_KEY}_2026`)));
+  });
+
+  const YEAR = new Date().getUTCFullYear();
+  // The exact shape ChallengeService.wishHappyAnniversary writes.
+  const race = {
+    coupleKey: COUPLE_KEY, type: "anniversary", title: `Anniversary Race ${YEAR}`,
+    prompt: "First to wish a happy anniversary wins!", participants: [ALICE, BOB],
+    status: "completed", createdBy: ALICE, winnerId: ALICE,
+    createdAt: new Date(), completedAt: new Date(),
+  };
+
+  test("first tap creates the anniversary race; an outsider cannot", async () => {
+    await assertFails(setDoc(doc(as(MALLORY), "challenges", "anniv_x"),
+      { ...race, createdBy: MALLORY }));
+    await assertSucceeds(setDoc(doc(as(ALICE), "challenges", `anniv_${COUPLE_KEY}_${YEAR}`), race));
+  });
+
+  test("the race can't be minted again under another id or year", async () => {
+    await assertFails(setDoc(doc(as(ALICE), "challenges", "anniv_whatever"), race));
+    await assertFails(setDoc(doc(as(ALICE), "challenges", `anniv_${COUPLE_KEY}_${YEAR + 5}`), race));
+    await assertFails(setDoc(doc(as(ALICE), "challenges", `anniv_${COUPLE_KEY}_${YEAR}`),
+      { ...race, winnerId: BOB }));
+  });
+
+  test("a quiz can be created in the shape the app writes", async () => {
+    await assertSucceeds(setDoc(doc(as(ALICE), "challenges", "quiz2"), {
+      coupleKey: COUPLE_KEY, type: "quiz", title: "Couple Quiz", prompt: "Where to?",
+      options: ["Italy", "Sweden"], createdBy: ALICE, participants: [ALICE, BOB],
+      status: "active", answers: { [ALICE]: { own: "Italy" } }, createdAt: new Date(),
+    }));
+  });
+
+  test("nobody can create a challenge that is already won (card minting)", async () => {
+    for (const type of ["quiz", "photo", "anything"]) {
+      await assertFails(setDoc(doc(as(ALICE), "challenges", `forged_${type}`), {
+        coupleKey: COUPLE_KEY, type, participants: [ALICE, BOB],
+        status: "completed", createdBy: ALICE, winnerId: ALICE,
+      }));
+    }
+    // Nor start a photo dash — only the scheduler does that.
+    await assertFails(setDoc(doc(as(ALICE), "challenges", "photo_forged"), {
+      coupleKey: COUPLE_KEY, type: "photo", participants: [ALICE, BOB],
+      status: "active", createdBy: ALICE,
+    }));
+  });
+
+  test("a challenge must belong to my own couple", async () => {
+    const strangers = [MALLORY, ALICE].sort().join("_");
+    await assertFails(setDoc(doc(as(MALLORY), "challenges", "quiz3"), {
+      coupleKey: strangers, type: "quiz", participants: [MALLORY, ALICE],
+      status: "active", createdBy: MALLORY, answers: {},
+    }));
+    // Mismatched key and participants.
+    await assertFails(setDoc(doc(as(ALICE), "challenges", "quiz4"), {
+      coupleKey: COUPLE_KEY, type: "quiz", participants: [ALICE, MALLORY],
+      status: "active", createdBy: ALICE, answers: {},
+    }));
+  });
+
+  test("a quiz cannot be completed or won by a client", async () => {
+    await assertFails(updateDoc(doc(as(BOB), "challenges", "quiz1"),
+      { status: "completed", winnerId: BOB }));
+    await assertFails(updateDoc(doc(as(BOB), "challenges", "quiz1"),
+      { [`answers.${BOB}`]: { own: "Italy" }, winnerId: BOB }));
+  });
+
+  test("a photo dash is claimed by its sender, for themselves only", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "challenges", "dash1"), {
+        coupleKey: COUPLE_KEY, type: "photo", participants: [ALICE, BOB],
+        status: "active", createdBy: "system", createdAt: new Date(),
+      });
+    });
+    const claim = { status: "completed", photoData: "aGVsbG8=", completedAt: new Date() };
+    await assertFails(updateDoc(doc(as(BOB), "challenges", "dash1"), { ...claim, winnerId: ALICE }));
+    await assertFails(updateDoc(doc(as(BOB), "challenges", "dash1"),
+      { ...claim, winnerId: BOB, cardAwarded: true }));
+    await assertFails(updateDoc(doc(as(MALLORY), "challenges", "dash1"), { ...claim, winnerId: MALLORY }));
+    await assertSucceeds(updateDoc(doc(as(BOB), "challenges", "dash1"), { ...claim, winnerId: BOB }));
+    // Completed is final: the partner cannot re-claim it.
+    await assertFails(updateDoc(doc(as(ALICE), "challenges", "dash1"), { ...claim, winnerId: ALICE }));
   });
 });
 
@@ -569,6 +799,15 @@ describe("server-only collections", () => {
   test("feedback must be attributed to the sender", async () => {
     await assertSucceeds(setDoc(doc(as(ALICE), "feedback", "f1"),
       { fromUserId: ALICE, text: "great app" }));
+    // The exact shape InputTabView writes.
+    await assertSucceeds(setDoc(doc(as(ALICE), "feedback", "f3"), {
+      fromUserId: ALICE, fromName: "Alice", type: "suggestion",
+      text: "x".repeat(2000), createdAt: new Date(),
+    }));
+    await assertFails(setDoc(doc(as(ALICE), "feedback", "f4"),
+      { fromUserId: ALICE, text: "x".repeat(2001) }));
+    await assertFails(setDoc(doc(as(ALICE), "feedback", "f5"),
+      { fromUserId: ALICE, text: "hi", attachment: "x".repeat(500000) }));
     await assertFails(setDoc(doc(as(ALICE), "feedback", "f2"),
       { fromUserId: BOB, text: "impersonated" }));
   });
@@ -576,5 +815,29 @@ describe("server-only collections", () => {
   test("nothing in the database may be deleted by a client", async () => {
     await assertFails(deleteDoc(doc(as(ALICE), "users", ALICE)));
     await assertFails(deleteDoc(doc(as(ALICE), "doghouseEvents", "evt1")));
+  });
+});
+
+// ───────────────────────── staged: partnerId lockdown ─────────────────────────
+//
+// Enable together with the STAGED rule under /users (and the isMyCoupleKey
+// clause) once no build older than 1.1 (6) is in use. Until then 1.1 (5)
+// pairs by writing partnerId directly and these would fail by design.
+describe.skip("staged partnerId lockdown", () => {
+  test("nobody can point partnerId at a stranger", async () => {
+    await assertFails(updateDoc(doc(as(MALLORY), "users", MALLORY), { partnerId: ALICE }));
+  });
+
+  test("unpairing and skipping stay open", async () => {
+    await assertSucceeds(updateDoc(doc(as(MALLORY), "users", MALLORY), { partnerId: "skipped" }));
+    await assertSucceeds(updateDoc(doc(as(ALICE), "users", ALICE), { partnerId: deleteField() }));
+  });
+
+  test("an ex who re-points at me cannot reach our old couple docs", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "coupleMeta", COUPLE_KEY), { anniversary: new Date() });
+      await updateDoc(doc(ctx.firestore(), "users", BOB), { partnerId: deleteField() });
+    });
+    await assertFails(getDoc(doc(as(ALICE), "coupleMeta", COUPLE_KEY)));
   });
 });

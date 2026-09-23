@@ -111,6 +111,21 @@ function categoryOf(itemId: string): string {
   return itemId.split("_")[0]; // "necklace_gold" -> "necklace"
 }
 
+/** Balance a brand-new account is shown (client: UserProfile.effectiveTreats). */
+const STARTING_TREATS = 100;
+
+/**
+ * Balance after a credit or debit. Accounts are created WITHOUT a `treats`
+ * field and every reader treats "absent" as STARTING_TREATS, so a bare
+ * FieldValue.increment on the absent field computed from 0 and silently wiped
+ * the 100 starter treats on the first claim, purchase or roses (found by the
+ * 2026-09-22 QA run). Always write the absolute value, from inside the
+ * transaction that read the doc.
+ */
+function treatsAfter(me: FirebaseFirestore.DocumentData | undefined, delta: number): number {
+  return ((me?.treats as number | undefined) ?? STARTING_TREATS) + delta;
+}
+
 /** Effective grace = stored + 1 per 24h since lastGraceRecharge, capped. */
 function effectiveGraceCharges(stored: number, lastRecharge?: Timestamp): number {
   if (!lastRecharge) return stored;
@@ -127,6 +142,44 @@ function requireAuth(req: CallableRequest): string {
 
 function coupleKeyOf(a: string, b: string): string {
   return [a, b].sort().join("_");
+}
+
+/**
+ * Partner-scoped actions must check BOTH halves of the link. `partnerId` on
+ * the caller's own document is self-asserted (owner-writable by rule), so on
+ * its own it proves nothing: anyone could point it at a stranger's uid and
+ * then send them to the doghouse, gift or equip on them, or deliver wishes.
+ * The partner's document pointing back is the proof.
+ */
+function requireMutualPartner(
+  uid: string,
+  partnerId: string | undefined,
+  partner: FirebaseFirestore.DocumentData | undefined
+): string {
+  if (!partnerId || partnerId === "skipped" || partner?.partnerId !== uid) {
+    throw new HttpsError("failed-precondition", "You have no partner.");
+  }
+  return partnerId;
+}
+
+/**
+ * When this account really started: the later of the profile's createdAt and
+ * the Firebase Auth account's creation time. createdAt sits on a document the
+ * owner can write (and older accounts may already have edited it), and it
+ * feeds the room-level treat rate, so it is clamped to something only the
+ * server controls.
+ */
+async function accountCreatedMs(uid: string, createdAt?: Timestamp): Promise<number | undefined> {
+  let authMs: number | undefined;
+  try {
+    const t = Date.parse((await auth.getUser(uid)).metadata.creationTime);
+    if (!Number.isNaN(t)) authMs = t;
+  } catch (err) {
+    logger.warn(`[accountCreatedMs] No auth record for ${uid}`, err);
+  }
+  const docMs = createdAt?.toMillis();
+  if (authMs === undefined) return docMs;
+  return docMs === undefined ? authMs : Math.max(authMs, docMs);
 }
 
 /**
@@ -396,6 +449,15 @@ export const onDoghouseEvent = onDocumentWritten(
 //     sitting on the "waiting" screen advances without entering a
 //     code themselves. No loop: when B's doc updates, A already
 //     points at B, so the trigger no-ops.
+//
+//     LEGACY PATH. The trigger cannot tell whether A ever knew B's
+//     pairing code — A may simply have written B's uid — so it links
+//     any unpaired account to anyone who names it. Builds from 1.1 (6)
+//     pair through the pairWithCode callable instead, which checks the
+//     code and links both halves atomically (the trigger then sees an
+//     already-mutual pair and does nothing). Once no build older than
+//     that is in use, the staged partnerId rule in firestore.rules
+//     stops direct writes and this reciprocation becomes unreachable.
 // ─────────────────────────────────────────────────────────────
 export const onUserPaired = onDocumentUpdated(
   { document: "users/{uid}", region: REGION },
@@ -441,6 +503,61 @@ export const onUserPaired = onDocumentUpdated(
     logger.info(`[pairing] Completed mutual pairing ${uid} ↔ ${newPartnerId}`);
   }
 );
+
+/**
+ * Pair with the owner of a pairing code. The code is the proof of consent:
+ * it lives on the owner's private document and is only shared on purpose.
+ * Both profiles are linked in one transaction, so there is never a window in
+ * which only one half points at the other.
+ */
+export const pairWithCode = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const code = (req.data?.code ?? "").toString().trim().toUpperCase();
+  if (!/^[A-Z0-9]{6}$/.test(code)) {
+    throw new HttpsError("invalid-argument", "Invalid partner code");
+  }
+
+  const partnerUid = (await db.collection("partnerCodes").doc(code).get())
+    .data()?.userId as string | undefined;
+  if (!partnerUid) throw new HttpsError("not-found", "Invalid partner code");
+  if (partnerUid === uid) {
+    throw new HttpsError("invalid-argument", "You cannot pair with yourself");
+  }
+
+  const meRef = db.collection("users").doc(uid);
+  const partnerRef = db.collection("users").doc(partnerUid);
+  const alreadyMutual = await db.runTransaction(async (tx) => {
+    const [meSnap, partnerSnap] = await Promise.all([tx.get(meRef), tx.get(partnerRef)]);
+    if (!meSnap.exists || !partnerSnap.exists) {
+      throw new HttpsError("failed-precondition", "Invalid partner code");
+    }
+    const mine = meSnap.data()?.partnerId as string | undefined;
+    const theirs = partnerSnap.data()?.partnerId as string | undefined;
+    if (mine === partnerUid && theirs === uid) return true;
+    if (theirs && theirs !== "skipped" && theirs !== uid) {
+      throw new HttpsError("failed-precondition", "This user is already paired with someone");
+    }
+    if (mine && mine !== "skipped" && mine !== partnerUid) {
+      throw new HttpsError("failed-precondition", "Unpair from your current partner first");
+    }
+    tx.update(meRef, { partnerId: partnerUid });
+    tx.update(partnerRef, { partnerId: uid });
+    return false;
+  });
+
+  if (!alreadyMutual) {
+    // onUserPaired sees an already-mutual pair and stays quiet, so the
+    // "you're paired" push is sent from here.
+    await notifyUser(
+      partnerUid,
+      "❤️ You're paired!",
+      `${await displayName(uid)} connected with you on DogHouse. Let the games begin!`,
+      { data: { type: "doghouse" } }
+    );
+    logger.info(`[pairing] Paired by code ${uid} ↔ ${partnerUid}`);
+  }
+  return { ok: true, partnerId: partnerUid };
+});
 
 // ─────────────────────────────────────────────────────────────
 // 2. Belly rubs
@@ -615,6 +732,21 @@ export const onFeedPostCreated = onDocumentCreated(
 // ─────────────────────────────────────────────────────────────
 // 6. Feed reactions — ❤️ backs the sender, 🐶 sides with the dog
 // ─────────────────────────────────────────────────────────────
+/**
+ * The roasts the app offers (CannedRoast.all in Models/FeedPost.swift). Keep
+ * the two lists identical: a line missing here is silently not pushed.
+ */
+const CANNED_ROASTS = new Set<string>([
+  "Justice served 🍖",
+  "FREE MY BOY",
+  "Guilty as charged 🐕‍🦺",
+  "The audacity!",
+  "Somebody call the pawlice 🚨",
+  "Straight to the pound",
+  "He would never!! (he did)",
+  "Bad dog. No treats.",
+]);
+
 export const onFeedPostReaction = onDocumentUpdated(
   { document: "feedPosts/{postId}", region: REGION },
   async (event) => {
@@ -651,6 +783,12 @@ export const onFeedPostReaction = onDocumentUpdated(
     for (const [uid, roast] of Object.entries(afterRoasts)) {
       if (beforeRoasts[uid] === roast) continue;
       if (uid === after.receiverId) continue;
+      // The field is client-written, so only the app's own canned lines are
+      // pushed; anything else would put arbitrary text on someone's lock screen.
+      if (!CANNED_ROASTS.has(roast)) {
+        logger.warn(`[feed] Ignoring non-canned roast from ${uid} on ${event.params.postId}`);
+        continue;
+      }
       const roasterName = await displayName(uid);
       await notifyUser(
         after.receiverId,
@@ -825,6 +963,34 @@ export const resolveExpiredVotes = onSchedule(
 const FEEDBACK_EMAIL = "harrisonkennykrampe@gmail.com";
 const gmailAppPassword = defineSecret("GMAIL_APP_PASSWORD");
 
+/** Emails per user per hour, feedback and reports combined. */
+const EMAIL_QUOTA_PER_HOUR = 10;
+
+/**
+ * Whether this user may still trigger a developer email this hour. Feedback
+ * and reports are one client write each, so without a cap a single account
+ * could loop creates and bury the mailbox (and burn the Gmail sending
+ * limit). Over-quota submissions are still stored in Firestore; they just
+ * don't send an email. emailQuota/{uid} is server-only (no rule matches it).
+ */
+async function withinEmailQuota(uid: string | undefined): Promise<boolean> {
+  if (!uid) return false;
+  const ref = db.collection("emailQuota").doc(uid);
+  return db.runTransaction(async (tx) => {
+    const q = (await tx.get(ref)).data();
+    const now = Date.now();
+    const windowStart = (q?.windowStart as Timestamp | undefined)?.toMillis() ?? 0;
+    if (now - windowStart >= 3_600_000) {
+      tx.set(ref, { windowStart: Timestamp.fromMillis(now), count: 1 });
+      return true;
+    }
+    const count = (q?.count as number | undefined) ?? 0;
+    if (count >= EMAIL_QUOTA_PER_HOUR) return false;
+    tx.update(ref, { count: count + 1 });
+    return true;
+  });
+}
+
 export const onFeedbackCreated = onDocumentCreated(
   { document: "feedback/{feedbackId}", region: REGION, secrets: [gmailAppPassword] },
   async (event) => {
@@ -834,6 +1000,10 @@ export const onFeedbackCreated = onDocumentCreated(
     const kind: string = fb.type ?? "feedback";
     const fromName: string = fb.fromName ?? "Unknown";
     const text: string = fb.text ?? "";
+    if (!(await withinEmailQuota(fb.fromUserId))) {
+      logger.warn(`[feedback] Email quota exceeded for ${fb.fromUserId}; stored only`);
+      return;
+    }
 
     try {
       const transporter = nodemailer.createTransport({
@@ -917,6 +1087,7 @@ export const onDeletionRequest = onDocumentCreated(
       await deleteWhere("feedback", "fromUserId", uid);
       await deleteWhere("reports", "reporterId", uid);
       await db.collection("blocks").doc(uid).delete();
+      await db.collection("emailQuota").doc(uid).delete();
       await deleteArrayContains("challenges", "participants", uid);
       // Votes: a deleted account merely leaves the audience. Deleting every
       // vote it could see wiped other couples' running jailbreak votes. A
@@ -969,6 +1140,30 @@ export const onDeletionRequest = onDocumentCreated(
 // ─────────────────────────────────────────────────────────────
 // 9. Challenges — quiz resolution + "Whatever I Want" card awards
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Whether a completed challenge is one that pays a card: a photo dash the
+ * scheduler started, or the couple's one anniversary race for this year
+ * (deterministic id, created by its winner — see ChallengeService). Quizzes
+ * never pay. The caller separately checks that the couple is mutual.
+ */
+function earnsCard(id: string, c: FirebaseFirestore.DocumentData): boolean {
+  const participants = c.participants as unknown;
+  if (!Array.isArray(participants) || participants.length !== 2) return false;
+  const [a, b] = participants as string[];
+  if (typeof a !== "string" || typeof b !== "string" || a === b) return false;
+  if (!participants.includes(c.winnerId)) return false;
+  const key = coupleKeyOf(a, b);
+  if (c.coupleKey !== key) return false;
+
+  if (c.type === "photo") return c.createdBy === "system";
+  if (c.type === "anniversary") {
+    const year = new Date().getUTCFullYear();
+    return c.createdBy === c.winnerId &&
+      [year - 1, year, year + 1].some((y) => id === `anniv_${key}_${y}`);
+  }
+  return false;
+}
 export const onChallengeWritten = onDocumentWritten(
   { document: "challenges/{challengeId}", region: REGION },
   async (event) => {
@@ -1003,14 +1198,36 @@ export const onChallengeWritten = onDocumentWritten(
       return;
     }
 
-    // Award: any completed challenge with a winner grants one card (once)
+    // Award: a legitimately won challenge grants one card (once). The
+    // document is client-written, so "completed with a winner" alone proves
+    // nothing — a client could create one naming itself. Only the two
+    // card-bearing kinds count, each checked for provenance, and the flag
+    // and the increment commit together so a redelivered event can't pay twice.
     if (after.status === "completed" && after.winnerId && after.cardAwarded !== true) {
       const winnerId: string = after.winnerId;
       const loserId = participants.find((p) => p !== winnerId);
-      await ref.update({ cardAwarded: true });
-      await db.collection("users").doc(winnerId).update({
-        wishCards: FieldValue.increment(1),
+      const awarded = await db.runTransaction(async (tx) => {
+        const c = (await tx.get(ref)).data();
+        if (!c || c.cardAwarded === true || c.status !== "completed" ||
+            c.winnerId !== winnerId || !earnsCard(event.params.challengeId, c)) {
+          return false;
+        }
+        const [a, b] = c.participants as string[];
+        const [aSnap, bSnap] = await Promise.all([
+          tx.get(db.collection("users").doc(a)),
+          tx.get(db.collection("users").doc(b)),
+        ]);
+        if (aSnap.data()?.partnerId !== b || bSnap.data()?.partnerId !== a) return false;
+        tx.update(ref, { cardAwarded: true });
+        tx.update(db.collection("users").doc(winnerId), {
+          wishCards: FieldValue.increment(1),
+        });
+        return true;
       });
+      if (!awarded) {
+        logger.warn(`[challenge] No card for ${event.params.challengeId} (won by ${winnerId})`);
+        return;
+      }
 
       const winnerName = await displayName(winnerId);
       const flavor: Record<string, [string, string]> = {
@@ -1074,6 +1291,14 @@ export const dailyAnniversaryCheck = onSchedule(
         anniversary.getMonth() === today.getMonth() &&
         anniversary.getDate() === today.getDate()
       ) {
+        // coupleMeta is client-written: push only to a couple that is real
+        // and actually owns this document.
+        const [a, b] = userIds;
+        if (doc.id !== coupleKeyOf(a, b)) continue;
+        const [aDoc, bDoc] = await Promise.all([
+          db.collection("users").doc(a).get(), db.collection("users").doc(b).get(),
+        ]);
+        if (aDoc.data()?.partnerId !== b || bDoc.data()?.partnerId !== a) continue;
         await notifyUsers(
           userIds,
           "💍 It's your anniversary!",
@@ -1139,6 +1364,7 @@ export const sendToDoghouse = onCall({ region: REGION }, async (req) => {
       ]);
       const me = meSnap.data() ?? {};
       const partner = partnerSnap.data() ?? {};
+      requireMutualPartner(uid, me.partnerId as string | undefined, partner);
 
       const immunity = partner.immunityUntil as Timestamp | undefined;
       if (immunity && immunity.toMillis() > Date.now()) {
@@ -1187,7 +1413,7 @@ export const releasePartner = onCall({ region: REGION }, async (req) => {
   const uid = requireAuth(req);
   return once(uid, req.data?.idempotencyKey, async () => {
     const eventId: string = req.data?.eventId;
-    const byRedemption = req.data?.byRedemption === true;
+    const askedForRedemption = req.data?.byRedemption === true;
     if (!eventId) throw new HttpsError("invalid-argument", "Missing eventId.");
 
     const ref = db.collection("doghouseEvents").doc(eventId);
@@ -1202,6 +1428,15 @@ export const releasePartner = onCall({ region: REGION }, async (req) => {
         throw new HttpsError("permission-denied", "Only the sender can release.");
       }
       if (ev.isActive !== true) return true;
+      // The redemption reward is only for a dog who asked for redemption
+      // (requestRedemption, receiver-only). Without this the sender could
+      // pay their partner REDEMPTION_TREATS on every release. A flag the
+      // event doesn't back is a plain release, not an error.
+      const byRedemption = askedForRedemption && ev.redemptionRequested === true;
+
+      // All reads before any write (Firestore transaction rule).
+      const receiverRef = db.collection("users").doc(ev.receiverId as string);
+      const receiver = (await tx.get(receiverRef)).data();
 
       tx.update(ref, {
         isActive: false, endedAt: now,
@@ -1211,10 +1446,10 @@ export const releasePartner = onCall({ region: REGION }, async (req) => {
       // Both partners' treat clocks restart now: claimHomeTreats pays for
       // every hour since lastTreatAward, and without this reset the hours one
       // of them spent in the doghouse would be paid out at release.
-      tx.update(db.collection("users").doc(ev.receiverId as string), {
+      tx.update(receiverRef, {
         immunityUntil: Timestamp.fromMillis(now.toMillis() + IMMUNITY_SECONDS * 1000),
         lastTreatAward: now,
-        ...(byRedemption ? { treats: FieldValue.increment(REDEMPTION_TREATS) } : {}),
+        ...(byRedemption ? { treats: treatsAfter(receiver, REDEMPTION_TREATS) } : {}),
       });
       tx.update(db.collection("users").doc(uid), { lastTreatAward: now });
       return false;
@@ -1270,10 +1505,10 @@ export const sendRoses = onCall({ region: REGION }, async (req) => {
     const { partnerId, fromName, treatsRemaining } = await db.runTransaction(
       async (tx) => {
         const me = (await tx.get(meRef)).data() ?? {};
-        const pid = me.partnerId as string | undefined;
-        if (!pid || pid === "skipped") {
-          throw new HttpsError("failed-precondition", "You have no partner.");
-        }
+        const claimed = me.partnerId as string | undefined;
+        const partner = claimed && claimed !== "skipped" ?
+          (await tx.get(db.collection("users").doc(claimed))).data() : undefined;
+        const pid = requireMutualPartner(uid, claimed, partner);
 
         const treats = (me.treats as number | undefined) ?? 100;
         if (treats < ROSES_COST) {
@@ -1282,7 +1517,7 @@ export const sendRoses = onCall({ region: REGION }, async (req) => {
         }
 
         const name = (me.displayName as string | undefined) ?? "Your partner";
-        tx.update(meRef, { treats: FieldValue.increment(-ROSES_COST) });
+        tx.update(meRef, { treats: treats - ROSES_COST });
         tx.set(db.collection("roses").doc(pid), {
           fromUserId: uid,
           fromDisplayName: name,
@@ -1324,14 +1559,16 @@ export const purchaseCosmetic = onCall({ region: REGION }, async (req) => {
 
         let target = uid;
         if (forPartner) {
-          const partnerId = me.partnerId as string | undefined;
-          if (!partnerId || partnerId === "skipped") {
+          const claimed = me.partnerId as string | undefined;
+          const partner = claimed && claimed !== "skipped" ?
+            (await tx.get(db.collection("users").doc(claimed))).data() : undefined;
+          if (!claimed || claimed === "skipped" || partner?.partnerId !== uid) {
             throw new HttpsError("failed-precondition", "You have no partner to gift to.");
           }
-          target = partnerId;
+          target = claimed;
         }
 
-        tx.update(meRef, { treats: FieldValue.increment(-price) });
+        tx.update(meRef, { treats: treats - price });
         tx.update(db.collection("users").doc(target), {
           ownedItemIds: FieldValue.arrayUnion(itemId),
         });
@@ -1363,11 +1600,10 @@ export const equipCosmetic = onCall({ region: REGION }, async (req) => {
   const me = (await db.collection("users").doc(uid).get()).data() ?? {};
   let targetId = uid;
   if (forPartner) {
-    const partnerId = me.partnerId as string | undefined;
-    if (!partnerId || partnerId === "skipped") {
-      throw new HttpsError("failed-precondition", "You have no partner.");
-    }
-    targetId = partnerId;
+    const claimed = me.partnerId as string | undefined;
+    const partner = claimed && claimed !== "skipped" ?
+      (await db.collection("users").doc(claimed).get()).data() : undefined;
+    targetId = requireMutualPartner(uid, claimed, partner);
   }
 
   const targetRef = db.collection("users").doc(targetId);
@@ -1409,8 +1645,10 @@ export const claimHomeTreats = onCall({ region: REGION }, async (req) => {
     // Rate scales with room level (time since last release). Derived here
     // from event history; the client used to send it and any client could
     // simply claim the top rate.
-    const createdAt = meData.createdAt as Timestamp | undefined;
-    const rate = roomRateFor(await homeStartMsFor(uid, createdAt), Date.now());
+    const createdMs = await accountCreatedMs(uid, meData.createdAt as Timestamp | undefined);
+    const rate = roomRateFor(
+      await homeStartMsFor(uid, createdMs === undefined ? undefined : Timestamp.fromMillis(createdMs)),
+      Date.now());
 
     // The elapsed-hours read and the lastTreatAward write must be atomic, or two
     // concurrent claims each award the same accrued hours.
@@ -1423,7 +1661,7 @@ export const claimHomeTreats = onCall({ region: REGION }, async (req) => {
 
       const amount = hours * rate;
       tx.update(meRef, {
-        treats: FieldValue.increment(amount),
+        treats: treatsAfter(me, amount),
         lastTreatAward: Timestamp.now(),
       });
       return amount;
@@ -1446,11 +1684,11 @@ export const redeemWishCard = onCall({ region: REGION }, async (req) => {
     const cardsRemaining = await db.runTransaction(async (tx) => {
       const me = (await tx.get(meRef)).data() ?? {};
       const cards = (me.wishCards as number | undefined) ?? 0;
-      const partnerId = me.partnerId as string | undefined;
       if (cards <= 0) throw new HttpsError("failed-precondition", "You have no cards to redeem.");
-      if (!partnerId || partnerId === "skipped") {
-        throw new HttpsError("failed-precondition", "You have no partner.");
-      }
+      const claimed = me.partnerId as string | undefined;
+      const partner = claimed && claimed !== "skipped" ?
+        (await tx.get(db.collection("users").doc(claimed))).data() : undefined;
+      const partnerId = requireMutualPartner(uid, claimed, partner);
 
       tx.set(db.collection("wishes").doc(), {
         fromUserId: uid, toUserId: partnerId,
@@ -1488,13 +1726,15 @@ export const randomPhotoDash = onSchedule(
     // Gather paired users, dedupe into couples by coupleKey
     const paired = await db.collection("users")
       .where("partnerId", "!=", "skipped").get();
+    // Only mutual pairs: a one-sided partnerId would otherwise start dashes
+    // with (and push to) whoever it names.
+    const partnerOf = new Map<string, string | undefined>();
+    paired.forEach((doc) => partnerOf.set(doc.id, doc.data().partnerId as string | undefined));
     const couples = new Map<string, [string, string]>();
-    paired.forEach((doc) => {
-      const uid = doc.id;
-      const partnerId = doc.data().partnerId as string | undefined;
-      if (!partnerId || partnerId === "skipped") return;
+    for (const [uid, partnerId] of partnerOf) {
+      if (!partnerId || partnerId === "skipped" || partnerOf.get(partnerId) !== uid) continue;
       couples.set(coupleKeyOf(uid, partnerId), [uid, partnerId]);
-    });
+    }
 
     const now = Date.now();
     for (const [key, [a, b]] of couples) {
@@ -1584,7 +1824,9 @@ export const engagementNudges = onSchedule(
 
         const partnerDoc = await db.collection("users").doc(partnerId).get();
         const partner = partnerDoc.data();
-        if (!partner) continue;
+        // Mutual only, or a one-sided partnerId would push a stranger's
+        // name and doghouse status to whoever named them.
+        if (!partner || partner.partnerId !== uid) continue;
 
         const key = coupleKeyOf(uid, partnerId);
         const [history, myActiveEvent, partnerActiveEvent, rubDoc] = await Promise.all([
@@ -1748,6 +1990,19 @@ export const addCoupleFriend = onCall({ region: REGION }, async (req) => {
     throw new HttpsError("invalid-argument", "That's your own couple!");
   }
 
+  // Both couples must be real: each partner points back. A one-sided
+  // partnerId would otherwise put a stranger into both couples' audiences.
+  const [myPartnerDoc, themPartnerDoc] = await Promise.all([
+    db.collection("users").doc(myPartner).get(),
+    db.collection("users").doc(themPartner).get(),
+  ]);
+  if (myPartnerDoc.data()?.partnerId !== uid) {
+    throw new HttpsError("failed-precondition", "Pair with your partner first.");
+  }
+  if (themPartnerDoc.data()?.partnerId !== themId) {
+    throw new HttpsError("failed-precondition", "That user isn't paired yet.");
+  }
+
   if (await anyBlockBetween([uid, myPartner], [themId, themPartner])) {
     throw new HttpsError("permission-denied", "That couple can't be added.");
   }
@@ -1811,6 +2066,10 @@ export const onReportCreated = onDocumentCreated(
   async (event) => {
     const r = event.data?.data();
     if (!r) return;
+    if (!(await withinEmailQuota(r.reporterId))) {
+      logger.warn(`[report] Email quota exceeded for ${r.reporterId}; stored only`);
+      return;
+    }
     const reporter = await displayName(r.reporterId ?? "");
     const lines = [
       `Target: ${r.targetType ?? "?"} ${r.targetId ?? "?"}`,
@@ -1929,6 +2188,30 @@ export const backfillPrivateUserData = onSchedule(
         }
       }
     }
+
+    // Starter treats. Accounts created before 2026-09-22 carry no `treats`
+    // field; every write now goes through treatsAfter(), so absent already
+    // means STARTING_TREATS — this just makes the balance explicit so the
+    // console and future queries see a number. Per-doc transaction so a claim
+    // landing between the scan and the write is never overwritten. The user
+    // base is small; a full scan is fine.
+    let seeded = 0;
+    const everyone = await db.collection("users").select("treats").get();
+    for (const doc of everyone.docs) {
+      if (doc.get("treats") !== undefined) continue;
+      try {
+        await db.runTransaction(async (tx) => {
+          const fresh = await tx.get(doc.ref);
+          if (fresh.exists && fresh.get("treats") === undefined) {
+            tx.update(doc.ref, { treats: STARTING_TREATS });
+            seeded += 1;
+          }
+        });
+      } catch (err) {
+        logger.error(`[backfill] Starter treats failed for ${doc.id}:`, err);
+      }
+    }
+    if (seeded > 0) logger.info(`[backfill] Seeded starter treats on ${seeded} account(s)`);
 
     // orderBy(field) only returns documents where the field exists, so an
     // empty result means the migration is complete.
@@ -2133,7 +2416,7 @@ export const revenuecatWebhook = onRequest(
           if (!me.exists) {
             throw new Error(`user ${uid} vanished before credit`);
           }
-          tx.update(meRef, { treats: FieldValue.increment(amount) });
+          tx.update(meRef, { treats: treatsAfter(me.data(), amount) });
         });
         // Doubles as the purchase record: once() persists this on the key doc,
         // which is now retained for PURCHASE_KEY_RETENTION_DAYS.
