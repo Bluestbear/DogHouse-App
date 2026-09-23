@@ -315,6 +315,14 @@ struct HomeView: View {
                 try? await Task.sleep(for: .seconds(2.5))
                 showSendAnimation = true
             }
+            // `-demoRelease homecoming|peaceOffering`: the same for the
+            // release animation, pinned to that scene.
+            .task {
+                guard AuthService.isDemo,
+                      UserDefaults.standard.string(forKey: "demoRelease") != nil else { return }
+                try? await Task.sleep(for: .seconds(2.5))
+                showReleaseAnimation = true
+            }
             #endif
             // Coming back from the background: the clock moved on without us,
             // so refresh immediately instead of showing a stale reading until
@@ -439,7 +447,11 @@ struct HomeView: View {
                 .zIndex(100)
             }
             if showReleaseAnimation {
-                ReleaseFromDogHouseAnimation(partnerName: partnerName) {
+                ReleaseFromDogHouseAnimation(
+                    partnerName: partnerName,
+                    avatarId: partnerAvatarId,
+                    cosmetics: partnerCosmetics
+                ) {
                     showReleaseAnimation = false
                 }
                 .zIndex(100)
