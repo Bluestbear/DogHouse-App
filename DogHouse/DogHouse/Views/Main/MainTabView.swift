@@ -55,6 +55,7 @@ struct MainTabView: View {
     private static var initialTab: AppTab {
         #if DEBUG
         if AuthService.isDemoShop { return .shop }
+        if AuthService.isDemoFriends { return .friends }
         #endif
         return .home
     }
@@ -128,7 +129,7 @@ struct MainTabView: View {
         }
         .task {
             #if DEBUG
-            if AuthService.isDemoShop { return }
+            if AuthService.isDemoTab { return }
             #endif
             await notificationService.refreshStatus()
             if notificationService.authStatus == .notDetermined {

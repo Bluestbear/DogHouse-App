@@ -20,14 +20,33 @@ class VoteService: ObservableObject {
 
     init(userId: String) {
         // Resolve real user ID from Firebase Auth when views pass "mock_user"
-        if userId == "mock_user", let realUid = Auth.auth().currentUser?.uid {
+        var signedInUid = Auth.auth().currentUser?.uid
+        #if DEBUG
+        // `-demoFriends` shows the mock feed even on a sim that is signed in.
+        if AuthService.isDemoFriends { signedInUid = nil }
+        #endif
+        if userId == "mock_user", let realUid = signedInUid {
             self.userId = realUid
         } else {
             self.userId = userId
         }
 
         // SwiftUI Preview guard
-        guard self.userId != "mock_user" else { return }
+        guard self.userId != "mock_user" else {
+            #if DEBUG
+            // `-demoFriends` shows the jailbreak banner above the mock feed.
+            if AuthService.isDemoFriends {
+                activeVoteEvents = [VoteEvent(
+                    id: "demo_vote", type: "joint_doghouse",
+                    doghousedUserIds: ["friend_1_partner", "friend_2_partner"],
+                    doghousedUserNames: ["friend_1_partner": "Sam", "friend_2_partner": "Luke"],
+                    votes: [:], startedAt: Date(), endsAt: Date().addingTimeInterval(30 * 60),
+                    status: "active"
+                )]
+            }
+            #endif
+            return
+        }
 
         // One listener covers both joint and group votes: every vote carries
         // audienceIds, and querying by array-contains(me) is the shape the

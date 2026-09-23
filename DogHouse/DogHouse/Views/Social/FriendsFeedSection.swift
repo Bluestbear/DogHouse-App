@@ -12,8 +12,10 @@ import SwiftUI
 
 struct JointVoteBanner: View {
     let vote: VoteEvent
-    @ObservedObject var voteService: VoteService
-    @ObservedObject var friendService: FriendService
+    /// A plain button rather than a NavigationLink: inside a List the link
+    /// adds a disclosure chevron beside the banner, which both clutters it
+    /// and makes it narrower than the feed card below.
+    let onOpen: () -> Void
 
     private var dogNames: String {
         let names = vote.doghousedUserIds.compactMap { vote.doghousedUserNames?[$0] }
@@ -21,13 +23,7 @@ struct JointVoteBanner: View {
     }
 
     var body: some View {
-        NavigationLink {
-            JointVoteLoaderView(
-                vote: vote,
-                voteService: voteService,
-                friendService: friendService
-            )
-        } label: {
+        Button(action: onOpen) {
             HStack(spacing: 12) {
                 Text("🚨")
                     .font(.title2)
@@ -52,15 +48,13 @@ struct JointVoteBanner: View {
                     .foregroundStyle(.white)
             }
             .padding(14)
-            .background(
-                LinearGradient(
-                    colors: [Color(red: 0.86, green: 0.33, blue: 0.33), Color.cozyOrange],
-                    startPoint: .leading, endPoint: .trailing
-                )
-            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.collarBrown)
             .clipShape(RoundedRectangle(cornerRadius: 14))
         }
-        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .buttonStyle(.plain)
+        // Zero side insets: the banner spans the same width as the feed card.
+        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
         .listRowBackground(Color.clear)
     }
 }
@@ -96,15 +90,6 @@ struct JointVoteLoaderView: View {
 struct FeedPostCard: View {
     let post: FeedPost
     @ObservedObject var feedService: FeedService
-    /// Ids of the votes currently running. A post keeps its `voteEventId`
-    /// after the vote settles (the losing dog stays in), so the badge must
-    /// check the vote, not the post.
-    var activeVoteIds: Set<String> = []
-
-    private var isInActiveVote: Bool {
-        guard post.isActive, let voteId = post.voteEventId else { return false }
-        return activeVoteIds.contains(voteId)
-    }
 
     private var myReaction: FeedReaction? {
         post.reaction(of: feedService.userId)
@@ -133,14 +118,22 @@ struct FeedPostCard: View {
                     Text("\(Text(post.senderName).bold()) sent \(Text(post.receiverName).bold()) to the DogHouse")
                         .font(.subheadline)
 
-                    Text("\(Text(post.createdAt, style: .relative)) ago")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    // "Sent X to the DogHouse" already says they're in, so an
+                    // active post needs no badge; only a finished one says so.
+                    HStack(spacing: 4) {
+                        Text("\(Text(post.createdAt, style: .relative)) ago")
+                        if let outcome {
+                            Text("·")
+                            Text(outcome)
+                                .foregroundStyle(Color.freedomGreen)
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 }
 
-                Spacer()
+                Spacer(minLength: 0)
 
-                statusBadge
                 moderationMenu
             }
 
@@ -154,16 +147,11 @@ struct FeedPostCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
             // Reactions + roast menu
-            HStack(spacing: 10) {
-                reactionButton(.back, count: post.backCount, label: "Back it")
-                reactionButton(.dog, count: post.dogCount, label: "Free the dog")
-                roastMenu
-                Spacer()
-                if isInActiveVote {
-                    Label("In a vote", systemImage: "hand.raised.fill")
-                        .font(.caption2.bold())
-                        .foregroundStyle(Color.cozyOrange)
-                }
+            // Full labels when they fit on one line, emoji + count when not,
+            // so a pill never wraps mid-word.
+            ViewThatFits(in: .horizontal) {
+                reactionRow(compact: false)
+                reactionRow(compact: true)
             }
 
             // Latest roasts
@@ -235,7 +223,7 @@ struct FeedPostCard: View {
         .buttonStyle(.plain)
     }
 
-    private var roastMenu: some View {
+    private func roastMenu(compact: Bool) -> some View {
         Menu {
             ForEach(CannedRoast.all, id: \.self) { roast in
                 Button(roast) {
@@ -252,8 +240,10 @@ struct FeedPostCard: View {
         } label: {
             HStack(spacing: 4) {
                 Text("🔥")
-                Text("Roast")
-                    .font(.caption.weight(.semibold))
+                if !compact {
+                    Text("Roast")
+                        .font(.caption.weight(.semibold))
+                }
                 if let count = post.roasts?.count, count > 0 {
                     Text("\(count)")
                         .font(.caption.bold().monospacedDigit())
@@ -266,36 +256,33 @@ struct FeedPostCard: View {
                     ? Color.red.opacity(0.15)
                     : Color(.systemGray6)
             )
+            .lineLimit(1)
+            .fixedSize()
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Roast")
     }
 
-    private var statusBadge: some View {
-        Group {
-            if post.isActive {
-                Text("IN THE HOUSE")
-                    .font(.system(size: 9, weight: .black))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(Color(red: 0.86, green: 0.33, blue: 0.33))
-                    .clipShape(Capsule())
-            } else {
-                Text(post.releasedByVote == true
-                     ? "FREED BY VOTE"
-                     : "Served \(post.servedDuration.feedFormatted)")
-                    .font(.system(size: 9, weight: .black))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(Color.freedomGreen)
-                    .clipShape(Capsule())
-            }
+    /// How a finished stint ended, shown beside the timestamp. nil while
+    /// the dog is still in.
+    private var outcome: String? {
+        guard !post.isActive else { return nil }
+        return post.releasedByVote == true
+            ? "freed by vote"
+            : "served \(post.servedDuration.feedFormatted)"
+    }
+
+    private func reactionRow(compact: Bool) -> some View {
+        HStack(spacing: 8) {
+            reactionButton(.back, count: post.backCount, label: "Back it", compact: compact)
+            reactionButton(.dog, count: post.dogCount, label: "Free the dog", compact: compact)
+            roastMenu(compact: compact)
+            Spacer(minLength: 0)
         }
     }
 
-    private func reactionButton(_ reaction: FeedReaction, count: Int, label: String) -> some View {
+    private func reactionButton(_ reaction: FeedReaction, count: Int, label: String, compact: Bool) -> some View {
         let isMine = myReaction == reaction
         return Button {
             HapticService.shared.success()
@@ -303,13 +290,17 @@ struct FeedPostCard: View {
         } label: {
             HStack(spacing: 4) {
                 Text(reaction.emoji)
-                Text(label)
-                    .font(.caption.weight(.semibold))
+                if !compact {
+                    Text(label)
+                        .font(.caption.weight(.semibold))
+                }
                 if count > 0 {
                     Text("\(count)")
                         .font(.caption.bold().monospacedDigit())
                 }
             }
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(isMine ? Color.cozyOrange.opacity(0.25) : Color(.systemGray6))
@@ -319,6 +310,7 @@ struct FeedPostCard: View {
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(count > 0 ? "\(label), \(count)" : label)
         .animation(.easeInOut(duration: 0.15), value: isMine)
     }
 }

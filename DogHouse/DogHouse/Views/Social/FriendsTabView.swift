@@ -14,13 +14,10 @@ struct FriendsTabView: View {
     @StateObject private var voteService = VoteService(userId: "mock_user")
     @StateObject private var feedService = FeedService(userId: "mock_user")
 
-    @State private var coupleCode = ""
-    @State private var isAdding = false
-    @State private var showError = false
-    @State private var errorText = ""
+    @State private var showAddCouple = false
+    @State private var openVote: VoteEvent?
     @State private var coupleToRemove: FriendCouple?
     @State private var coupleToBlock: FriendCouple?
-    @ObservedObject private var tour = TourCoordinator.shared
     @ObservedObject private var moderation = ModerationService.shared
 
     /// The feed minus anything from someone I've blocked.
@@ -30,15 +27,12 @@ struct FriendsTabView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
             List {
+                header
+
                 // Jailbreak votes — two dogs from friended couples in at once
                 ForEach(voteService.activeJointVotes) { vote in
-                    JointVoteBanner(
-                        vote: vote,
-                        voteService: voteService,
-                        friendService: friendService
-                    )
+                    JointVoteBanner(vote: vote) { openVote = vote }
                 }
 
                 // Friends feed — public sendings
@@ -55,14 +49,33 @@ struct FriendsTabView: View {
                     }
                 }
 
-                // Add a couple
-                addCoupleSection
-
                 // Friend couples
                 couplesSection
             }
             .navigationTitle("Friends")
             .dhPageBackground()
+            // The title is drawn in the List (see `header`) so the add button
+            // can sit on the same line; the title here only names the back
+            // button on pushed screens.
+            .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $showAddCouple) {
+                AddCoupleSheet(friendService: friendService)
+                    .environmentObject(authService)
+            }
+            .navigationDestination(isPresented: Binding(
+                get: { openVote != nil },
+                set: { if !$0 { openVote = nil } }
+            )) {
+                if let openVote {
+                    JointVoteLoaderView(
+                        vote: openVote,
+                        voteService: voteService,
+                        friendService: friendService
+                    )
+                    // Friends hides its bar; the vote screen needs the back button.
+                    .toolbar(.visible, for: .navigationBar)
+                }
+            }
             // AuthService is the live source of the pairing; FriendService used to
             // resolve it once at construction and could never recover if it was
             // unavailable at that instant.
@@ -103,30 +116,35 @@ struct FriendsTabView: View {
             } message: {
                 Text("You'll stop seeing each other's public sendings.")
             }
-            // The feed can push "Add a Couple" below the fold; the tour
-            // points at it, so bring it up when that step arrives.
-            // `initial: true` matters: this tab is created lazily when the tour
-            // switches to it, so by the time it exists the step has already
-            // changed and a plain onChange would never fire. The short delay
-            // lets the List lay out its rows before scrolling to one.
-            .onChange(of: tour.currentStep, initial: true) { _, step in
-                guard step == .friends else { return }
-                // No scroll animation: the overlay is dimmed and the
-                // spotlight fades in once the row has settled, so a visible
-                // glide (with the ring chasing it) only added motion. One
-                // scroll, after the List has laid out — scrolling earlier
-                // lands on an estimate and the row then hops again. The
-                // second call is a safety net for a slow first layout; it is
-                // a no-op when the row is already in place.
-                Task {
-                    try? await Task.sleep(for: .milliseconds(250))
-                    proxy.scrollTo("tour-add-couple", anchor: .center)
-                    try? await Task.sleep(for: .milliseconds(350))
-                    proxy.scrollTo("tour-add-couple", anchor: .center)
-                }
-            }
-            } // ScrollViewReader
         }
+    }
+
+    // MARK: - Header
+
+    /// Large title and add button on one line. A toolbar item can only sit
+    /// in the bar above a large title, never beside it.
+    private var header: some View {
+        HStack(alignment: .center) {
+            Text("Friends")
+                .font(.largeTitle.bold())
+                .accessibilityAddTraits(.isHeader)
+            Spacer()
+            Button {
+                showAddCouple = true
+            } label: {
+                Image(systemName: "person.badge.plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(Color.cozyOrange))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add a Couple")
+            .tourAnchor(.addCouple)
+        }
+        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 
     // MARK: - Feed Section
@@ -134,78 +152,10 @@ struct FriendsTabView: View {
     private var feedSection: some View {
         Section {
             ForEach(visiblePosts) { post in
-                FeedPostCard(
-                    post: post,
-                    feedService: feedService,
-                    activeVoteIds: Set(voteService.activeVoteEvents.map(\.id))
-                )
+                FeedPostCard(post: post, feedService: feedService)
             }
         } header: {
             Text("The Feed 📣")
-        }
-    }
-
-    // MARK: - Add a Couple
-
-    private var addCoupleSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    TextField("Enter a couple's code", text: $coupleCode)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                        .font(.system(.body, design: .monospaced))
-
-                    if isAdding {
-                        ProgressView()
-                    } else {
-                        Button("Add") {
-                            isAdding = true
-                            showError = false
-                            Task {
-                                defer { isAdding = false }
-                                do {
-                                    try await friendService.addCouple(code: coupleCode)
-                                    coupleCode = ""
-                                    HapticService.shared.success()
-                                } catch {
-                                    errorText = error.localizedDescription
-                                    showError = true
-                                }
-                            }
-                        }
-                        .disabled(coupleCode.count != 6)
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.cozyOrange)
-                    }
-                }
-
-                if let code = authService.partnerCode {
-                    Text("Your couple's code: **\(code)** (either partner's code works)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if showError {
-                    Text(errorText)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-
-                // A link that was created but can't be displayed used to be
-                // silent — the add appeared to work and the list stayed empty.
-                if let loadError = friendService.loadError {
-                    Text(loadError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-            .tourAnchor(.addCouple)
-            .id("tour-add-couple")
-        } header: {
-            Text("Add a Couple")
-        } footer: {
-            Text("Friends are couple-to-couple: connecting links all four of you.")
         }
     }
 
@@ -218,12 +168,9 @@ struct FriendsTabView: View {
                     icon: "person.2.slash",
                     title: "No Couples Yet",
                     subtitle: "Share your code with another couple to connect!",
-                    actionTitle: "Copy Code"
+                    actionTitle: "Add a Couple"
                 ) {
-                    if let code = authService.partnerCode {
-                        UIPasteboard.general.string = code
-                        HapticService.shared.success()
-                    }
+                    showAddCouple = true
                 }
             } else {
                 ForEach(friendService.friendCouples) { couple in
@@ -245,6 +192,143 @@ struct FriendsTabView: View {
             }
         } header: {
             Text("Friend Couples")
+        }
+    }
+}
+
+// MARK: - Add a Couple
+
+/// Opened from the toolbar's add button: my code to share, and a field for
+/// theirs.
+struct AddCoupleSheet: View {
+    @EnvironmentObject var authService: AuthService
+    @ObservedObject var friendService: FriendService
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var coupleCode = ""
+    @State private var isAdding = false
+    @State private var errorText: String?
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 24) {
+                if let code = authService.partnerCode {
+                    myCodeCard(code)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Their code")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 10) {
+                        TextField("6-character code", text: $coupleCode)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .font(.system(.title3, design: .monospaced).bold())
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .onSubmit(add)
+
+                        Button(action: add) {
+                            Group {
+                                if isAdding {
+                                    ProgressView().tint(.white)
+                                } else {
+                                    Text("Add").bold()
+                                }
+                            }
+                            .frame(width: 64, height: 46)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                        .background(Color.cozyOrange.opacity(coupleCode.count == 6 ? 1 : 0.4))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .disabled(coupleCode.count != 6 || isAdding)
+                    }
+
+                    if let errorText {
+                        Text(errorText)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    // A link that was created but can't be displayed used to be
+                    // silent — the add appeared to work and the list stayed empty.
+                    if let loadError = friendService.loadError {
+                        Text(loadError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                Text("Friends are couple-to-couple: either partner's code works, and connecting links all four of you.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.pageGradient.ignoresSafeArea())
+            .navigationTitle("Add a Couple")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func myCodeCard(_ code: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your Partner Code")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack {
+                Text(code)
+                    .font(.system(size: 30, weight: .heavy, design: .rounded))
+                    .tracking(4)
+                    .foregroundStyle(Color.collarBrown)
+                    .textSelection(.enabled)
+                Spacer()
+                ShareLink(
+                    item: "Add us on DogHouse! Our couple code is \(code)",
+                    subject: Text("DogHouse couple code")
+                ) {
+                    Text("Share")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(Color.cozyOrange))
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func add() {
+        guard coupleCode.count == 6, !isAdding else { return }
+        isAdding = true
+        errorText = nil
+        Task {
+            defer { isAdding = false }
+            do {
+                try await friendService.addCouple(code: coupleCode)
+                coupleCode = ""
+                HapticService.shared.success()
+                dismiss()
+            } catch {
+                errorText = error.localizedDescription
+            }
         }
     }
 }

@@ -75,6 +75,10 @@ class AuthService: ObservableObject {
     /// terms gate and notification explainer already out of the way, so a
     /// plain `simctl launch` + screenshot shows the Shop with no taps.
     static let isDemoShop = isDemo && ProcessInfo.processInfo.arguments.contains("-demoShop")
+    /// `-demoFriends`: the same, for the Friends tab and its mock feed.
+    static let isDemoFriends = isDemo && ProcessInfo.processInfo.arguments.contains("-demoFriends")
+    /// A screenshot demo that opens straight on one tab, gates cleared.
+    static let isDemoTab = isDemoShop || isDemoFriends
 
     private func configureDemo() {
         isAuthInitialized = true
@@ -84,7 +88,7 @@ class AuthService: ObservableObject {
         // scene, not the onboarding, and the tour would sit on top of it.
         let straightToHome = DoghouseService.demoDoghouseHours != nil
             || ProcessInfo.processInfo.arguments.contains("-demoHome")
-            || Self.isDemoShop
+            || Self.isDemoTab
         userProfile = UserProfile(
             id: "demo_me", displayName: straightToHome ? "Harrison" : "", avatarId: straightToHome ? "dog_1" : nil,
             partnerCode: nil, partnerId: straightToHome ? "demo_partner" : nil, immunityUntil: nil,
@@ -94,7 +98,7 @@ class AuthService: ObservableObject {
             // owned + worn, owned + not worn, affordable, and out of reach.
             treats: 240, ownedItemIds: ["necklace_red", "hat_beanie"],
             equippedItemIds: [CosmeticCategory.necklace.rawValue: "necklace_red"],
-            termsAcceptedVersion: Self.isDemoShop ? Legal.termsVersion : nil
+            termsAcceptedVersion: Self.isDemoTab ? Legal.termsVersion : nil
         )
         partnerProfile = UserProfile(
             id: "demo_partner", displayName: "Sam", avatarId: "dog_3", partnerCode: nil,

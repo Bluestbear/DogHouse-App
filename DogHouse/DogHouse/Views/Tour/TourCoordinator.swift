@@ -35,12 +35,12 @@ enum TourAnchorID: String, CaseIterable, Sendable {
     case tasksButton      // toolbar: Your Tasks
     case gamesMenu        // toolbar: + menu
     case treatBalance     // Shop: the 🦴 balance capsule
-    case addCouple        // Friends: enter a couple's code
+    case addCouple        // Friends: the add-couple button by the title
     case anniversary      // Profile: anniversary section
 
     /// Controls drawn as a circle clipped out of a wider frame. The
     /// spotlight is squared to the circle rather than tracing the frame.
-    var isCircular: Bool { self == .rosesButton }
+    var isCircular: Bool { self == .rosesButton || self == .addCouple }
 }
 
 // MARK: - Steps
@@ -169,7 +169,7 @@ enum TourStep: Int, CaseIterable, Sendable {
             return TourStepContent(
                 emoji: "👥",
                 title: "Friend couples",
-                body: "Add other couples with their code. Public sendings show up in the feed, and when two dogs are in the DogHouse at once, friends vote on who gets out first."
+                body: "Tap the add button to connect with another couple using their code. Public sendings show up in the feed, and when two dogs are in the DogHouse at once, friends vote on who gets out first."
             )
         case .anniversary:
             return TourStepContent(

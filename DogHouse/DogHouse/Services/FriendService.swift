@@ -48,7 +48,12 @@ class FriendService: ObservableObject {
 
     init(userId: String) {
         // Resolve real user ID from Firebase Auth when views pass "mock_user"
-        if userId == "mock_user", let realUid = Auth.auth().currentUser?.uid {
+        var signedInUid = Auth.auth().currentUser?.uid
+        #if DEBUG
+        // `-demoFriends` shows the mock feed even on a sim that is signed in.
+        if AuthService.isDemoFriends { signedInUid = nil }
+        #endif
+        if userId == "mock_user", let realUid = signedInUid {
             self.userId = realUid
         } else {
             self.userId = userId

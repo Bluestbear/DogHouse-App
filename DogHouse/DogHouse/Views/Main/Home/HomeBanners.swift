@@ -61,10 +61,7 @@ struct AnniversaryRaceBanner: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(
-                LinearGradient(colors: [Color.cozyOrange, Color(red: 0.9, green: 0.35, blue: 0.45)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-            )
+            .background(Color.collarBrown)
             .foregroundStyle(.white)
             .clipShape(RoundedRectangle(cornerRadius: 14))
         }
