@@ -61,7 +61,7 @@ struct DoghouseScene: View {
                 ground
                 fence.offset(x: -138, y: 78)
                 tree.offset(x: 140, y: 44)
-                house.offset(y: 30)
+                house.offset(y: 40)
                 weather
                 Color.white.opacity(flash)
             }
@@ -143,11 +143,13 @@ struct DoghouseScene: View {
                     startPoint: .top, endPoint: .bottom
                 )
 
-                // Worn dirt patch where the house stands.
+                // Worn dirt patch where the house stands, centred 120pt below
+                // the scene centre: 4pt under the house's base (116pt), so the
+                // house sits on it with the patch's front edge showing.
                 Ellipse()
                     .fill(mix((0.55, 0.42, 0.26), (0.30, 0.24, 0.17), gloom).opacity(0.85))
-                    .frame(width: 230, height: 34)
-                    .offset(y: -6)
+                    .frame(width: 230, height: 30)
+                    .offset(y: -11)
 
                 if stage.showDirty {
                     ForEach(0..<4, id: \.self) { i in
@@ -265,8 +267,9 @@ struct DoghouseScene: View {
 
     private var house: some View {
         ZStack {
-            // Shadow on the ground
-            Ellipse().fill(Color.black.opacity(0.28)).frame(width: 205, height: 22).offset(y: 77)
+            // Shadow on the dirt patch: the wall's base is 76pt below the group
+            // centre, and this sits just under it, inside the patch.
+            Ellipse().fill(Color.black.opacity(0.28)).frame(width: 196, height: 14).offset(y: 78)
 
             houseBody.offset(y: 20)
             // Shadow the roof slab throws on the wall
@@ -281,18 +284,20 @@ struct DoghouseScene: View {
             door.offset(y: 37)
 
             // The dog, with everything that happens to it. The offset seats
-            // its paws on the ground rather than in mid-air: the house group
-            // is centred 30pt below the scene centre, the avatar's paws sit
-            // ~24pt below its own centre, and the ground's top edge is 102pt
-            // below the group centre — so 102 - 24 ≈ 48 puts the feet on it,
-            // level with the bottom of the doorway.
+            // its paws level with the bottom of the doorway (73pt below the
+            // group centre): the avatar's paws sit ~24pt below its own centre,
+            // so 48 + 24 ≈ 72 puts the feet just inside the door.
             dog.offset(y: 48)
 
             nameplate.offset(y: -14)
 
             if stage.showHunger {
-                thoughtBubble.offset(x: 62, y: -22).transition(.scale.combined(with: .opacity))
-                emptyBowl.offset(x: -80, y: 63).transition(.opacity)
+                // On the wall just right of the doorway, level with the dog's
+                // head; its trail steps into the doorway towards the dog.
+                thoughtBubble.offset(x: 58, y: 16).transition(.scale.combined(with: .opacity))
+                // On the dirt patch in front of the wall: the bowl's base
+                // (7pt below its centre) lands 10pt in front of the wall's.
+                emptyBowl.offset(x: -94, y: 79).transition(.opacity)
             }
             if stage.showFlies { flies.offset(x: -72, y: 28).transition(.opacity) }
             if stage.showMouse { mouse.offset(x: 82, y: 46).transition(.move(edge: .trailing).combined(with: .opacity)) }
@@ -551,6 +556,7 @@ struct DoghouseScene: View {
 
     private var emptyBowl: some View {
         ZStack {
+            Ellipse().fill(Color.black.opacity(0.25)).frame(width: 36, height: 6).offset(y: 7)
             UnevenRoundedRectangle(topLeadingRadius: 2, bottomLeadingRadius: 9, bottomTrailingRadius: 9, topTrailingRadius: 2)
                 .fill(Color(red: 0.75, green: 0.28, blue: 0.24)).frame(width: 30, height: 14)
             Ellipse().fill(Color.black.opacity(0.35)).frame(width: 24, height: 5).offset(y: -5)
@@ -560,10 +566,11 @@ struct DoghouseScene: View {
 
     private var thoughtBubble: some View {
         ZStack {
-            Ellipse().fill(Color.white.opacity(0.9)).frame(width: 40, height: 30)
-            Text("🍕").font(.system(size: 16))
-            Circle().fill(Color.white.opacity(0.7)).frame(width: 8).offset(x: -18, y: 15)
-            Circle().fill(Color.white.opacity(0.6)).frame(width: 5).offset(x: -14, y: 20)
+            Ellipse().fill(Color.white.opacity(0.95)).frame(width: 42, height: 32)
+            Text("🍕").font(.system(size: 17))
+            // Trail down-left towards the dog's head.
+            Circle().fill(Color.white.opacity(0.85)).frame(width: 7).offset(x: -23, y: 13)
+            Circle().fill(Color.white.opacity(0.75)).frame(width: 4).offset(x: -30, y: 18)
         }
     }
 
