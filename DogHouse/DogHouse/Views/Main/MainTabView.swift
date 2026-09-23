@@ -11,7 +11,7 @@ struct MainTabView: View {
     @StateObject private var notificationService = NotificationService.shared
     // One challenge service shared by Home (games) and Profile (anniversary)
     @StateObject private var challengeService = ChallengeService(userId: "mock_user", partnerId: "mock_partner")
-    @State private var selectedTab: AppTab = .home
+    @State private var selectedTab: AppTab = Self.initialTab
     @State private var showPermissionExplainer = false
     @State private var showWhatsNew = false
     /// Accounts that predate the Terms of Use accept them once, before
@@ -50,6 +50,13 @@ struct MainTabView: View {
 
     enum AppTab: Hashable {
         case home, friends, shop, profile, input
+    }
+
+    private static var initialTab: AppTab {
+        #if DEBUG
+        if AuthService.isDemoShop { return .shop }
+        #endif
+        return .home
     }
 
     var body: some View {
@@ -120,6 +127,9 @@ struct MainTabView: View {
             Task { await authService.recordActivity() }
         }
         .task {
+            #if DEBUG
+            if AuthService.isDemoShop { return }
+            #endif
             await notificationService.refreshStatus()
             if notificationService.authStatus == .notDetermined {
                 showPermissionExplainer = true

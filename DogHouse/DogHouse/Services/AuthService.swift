@@ -14,6 +14,9 @@ import GoogleSignIn
 import FirebaseAuth
 import FirebaseCrashlytics
 import FirebaseFirestore
+import FirebaseMessaging
+import UserNotifications
+import WidgetKit
 
 @MainActor
 class AuthService: ObservableObject {
@@ -68,6 +71,10 @@ class AuthService: ObservableObject {
     /// applied locally, so nothing reaches Firebase. Task negotiation is
     /// skipped (it needs a real second partner).
     static let isDemo = ProcessInfo.processInfo.arguments.contains("-demoOnboarding")
+    /// `-demoShop` (with `-demoOnboarding`): straight to the Shop tab with the
+    /// terms gate and notification explainer already out of the way, so a
+    /// plain `simctl launch` + screenshot shows the Shop with no taps.
+    static let isDemoShop = isDemo && ProcessInfo.processInfo.arguments.contains("-demoShop")
 
     private func configureDemo() {
         isAuthInitialized = true
@@ -77,18 +84,69 @@ class AuthService: ObservableObject {
         // scene, not the onboarding, and the tour would sit on top of it.
         let straightToHome = DoghouseService.demoDoghouseHours != nil
             || ProcessInfo.processInfo.arguments.contains("-demoHome")
+            || Self.isDemoShop
         userProfile = UserProfile(
             id: "demo_me", displayName: straightToHome ? "Harrison" : "", avatarId: straightToHome ? "dog_1" : nil,
             partnerCode: nil, partnerId: straightToHome ? "demo_partner" : nil, immunityUntil: nil,
             friendIds: [], createdAt: Date(), fcmToken: nil, graceCharges: UserProfile.maxGraceCharges,
-            lastGraceRecharge: Date(), tourComplete: straightToHome, onboardingComplete: straightToHome
+            lastGraceRecharge: Date(), tourComplete: straightToHome, onboardingComplete: straightToHome,
+            // A small wardrobe so the Shop shows every card state at once:
+            // owned + worn, owned + not worn, affordable, and out of reach.
+            treats: 240, ownedItemIds: ["necklace_red", "hat_beanie"],
+            equippedItemIds: [CosmeticCategory.necklace.rawValue: "necklace_red"],
+            termsAcceptedVersion: Self.isDemoShop ? Legal.termsVersion : nil
         )
         partnerProfile = UserProfile(
             id: "demo_partner", displayName: "Sam", avatarId: "dog_3", partnerCode: nil,
             partnerId: "demo_me", immunityUntil: nil, friendIds: [], createdAt: Date(),
             fcmToken: nil, graceCharges: UserProfile.maxGraceCharges,
-            lastGraceRecharge: Date(), tourComplete: true, onboardingComplete: true
+            lastGraceRecharge: Date(), tourComplete: true, onboardingComplete: true,
+            ownedItemIds: ["glasses_cool"],
+            equippedItemIds: [CosmeticCategory.glasses.rawValue: "glasses_cool"]
         )
+    }
+
+    // MARK: Demo economy (debug builds only)
+    //
+    // The real economy is server-only (see CURRENT_STATE.md §2). In demo mode
+    // there is no server, so the Shop applies the same rules locally. These
+    // exist purely so the Shop and treat store can be driven end-to-end on a
+    // simulator; nothing here is reachable from a release build.
+
+    /// Credit treats, standing in for the RevenueCat webhook.
+    func demoAddTreats(_ amount: Int) {
+        guard Self.isDemo else { return }
+        userProfile?.treats = (userProfile?.effectiveTreats ?? 100) + amount
+    }
+
+    /// Buy a cosmetic for myself or my partner, spending my treats.
+    func demoPurchase(_ item: CosmeticItem, forPartner: Bool) throws {
+        guard Self.isDemo else { return }
+        let balance = userProfile?.effectiveTreats ?? 100
+        guard balance >= item.price else {
+            throw NSError(domain: "AuthService", code: -10,
+                          userInfo: [NSLocalizedDescriptionKey: "Not enough treats! Keep playing 🦴"])
+        }
+        userProfile?.treats = balance - item.price
+        if forPartner {
+            partnerProfile?.ownedItemIds = (partnerProfile?.ownedItemIds ?? []) + [item.id]
+        } else {
+            userProfile?.ownedItemIds = (userProfile?.ownedItemIds ?? []) + [item.id]
+        }
+    }
+
+    /// Equip (`itemId`) or clear (`nil`) one category on me or my partner.
+    func demoEquip(_ itemId: String?, category: CosmeticCategory, forPartner: Bool) {
+        guard Self.isDemo else { return }
+        if forPartner {
+            var ids = partnerProfile?.equippedItemIds ?? [:]
+            ids[category.rawValue] = itemId
+            partnerProfile?.equippedItemIds = ids
+        } else {
+            var ids = userProfile?.equippedItemIds ?? [:]
+            ids[category.rawValue] = itemId
+            userProfile?.equippedItemIds = ids
+        }
     }
     #endif
 
@@ -165,6 +223,9 @@ class AuthService: ObservableObject {
                     self.partnerDocListener?.remove()
                     self.partnerDocListener = nil
                     self.partnerProfile = nil
+                    // Here rather than in signOut() so it also covers account
+                    // deletion and a session that simply expired.
+                    Self.clearWidgetState()
                 }
             }
         }
@@ -672,8 +733,18 @@ class AuthService: ObservableObject {
 
     /// Attach this device's push token to the account that just signed in.
     private func syncTokenAfterSignIn() async {
-        guard let uid = Auth.auth().currentUser?.uid,
-              let token = UserDefaults.standard.string(forKey: "fcmToken") else { return }
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        // Sign-out deletes the token and its cache, so after a switch of
+        // accounts there is nothing cached: ask FCM for a fresh one.
+        // Bounded: without an APNs token (simulator, notifications refused)
+        // this can stall, and it sits on the sign-in path.
+        if UserDefaults.standard.string(forKey: "fcmToken") == nil {
+            await Self.withTimeout {
+                let fresh = try await Messaging.messaging().token()
+                UserDefaults.standard.set(fresh, forKey: "fcmToken")
+            }
+        }
+        guard let token = UserDefaults.standard.string(forKey: "fcmToken") else { return }
         await writeFCMToken(token, uid: uid)
     }
 
@@ -695,7 +766,42 @@ class AuthService: ObservableObject {
                 }
             }
             try? Auth.auth().signOut()
+            // The Firestore delete above can miss (offline, or the 2s cap), and
+            // then the old account kept pushing to this phone. Invalidating the
+            // token at FCM makes any copy the server still holds dead: sends
+            // fail and notifyUser clears it. Done AFTER signOut, so a fresh
+            // token FCM issues in response can't be attached to the old
+            // account by the refresh observer (it needs a current user). The
+            // cached copy goes too, or the next sign-in would attach the dead
+            // token to the new account (syncTokenAfterSignIn fetches a fresh one).
+            await Self.withTimeout { try await Messaging.messaging().deleteToken() }
+            UserDefaults.standard.removeObject(forKey: "fcmToken")
+            UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             // Auth state listener handles resetting isAuthenticated and userProfile
+        }
+    }
+
+    /// Wipe what HomeView.writeWidgetState shares with the widget. The App
+    /// Group outlives the session, so without this the Home and Lock Screen
+    /// widgets kept showing the previous account's names, avatars and
+    /// doghouse status after sign-out.
+    private static func clearWidgetState() {
+        if let defaults = UserDefaults(suiteName: "group.com.harrisonkrampe.doghouse") {
+            for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("widget_") {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    /// Run `work`, giving up after `seconds`. For network calls on the
+    /// sign-in/sign-out path, which must not hang offline.
+    private static func withTimeout(seconds: Double = 2, _ work: @escaping @Sendable () async throws -> Void) async {
+        try? await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await work() }
+            group.addTask { try await Task.sleep(for: .seconds(seconds)) }
+            try await group.next()
+            group.cancelAll()
         }
     }
 
@@ -748,40 +854,16 @@ class AuthService: ObservableObject {
         }
         #endif
 
-        guard let myUid = Auth.auth().currentUser?.uid else {
+        guard Auth.auth().currentUser != nil else {
             throw NSError(domain: "AuthService", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "Not signed in"])
         }
 
-        // Look up the partner code
-        let codeDoc = try await fs.partnerCodesCollection.document(code.uppercased()).getDocument()
-        guard let partnerUid = codeDoc.data()?["userId"] as? String else {
-            throw NSError(domain: "AuthService", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "Invalid partner code"])
-        }
-
-        guard partnerUid != myUid else {
-            throw NSError(domain: "AuthService", code: -3,
-                          userInfo: [NSLocalizedDescriptionKey: "You cannot pair with yourself"])
-        }
-
-        // Check partner is not already paired with someone else.
-        // Allow the case where partner already points to us — this happens when both
-        // users enter each other's codes simultaneously and the partner's write landed first.
-        let partnerDoc = try await fs.usersCollection.document(partnerUid).getDocument()
-        let fetchedPartner = try fs.decode(UserProfile.self, from: partnerDoc)
-        if let existingPartner = fetchedPartner.partnerId,
-           existingPartner != "skipped",
-           existingPartner != myUid {
-            throw NSError(domain: "AuthService", code: -4,
-                          userInfo: [NSLocalizedDescriptionKey: "This user is already paired with someone"])
-        }
-
-        // Only write to our own document. Writing to the partner's document requires
-        // cross-user Firestore permissions which are typically restricted by security rules,
-        // causing the batch to fail silently and the view to never advance.
-        // Each user entering the other's code handles mutual pairing independently.
-        try await fs.usersCollection.document(myUid).updateData(["partnerId": partnerUid])
+        // The server resolves the code and links both profiles in one
+        // transaction. Writing our own partnerId directly (as up to 1.1 (5))
+        // let anyone who knew a uid pair with that account without its code;
+        // that path is being closed by rule once older builds are gone.
+        try await CloudFunctions.shared.call("pairWithCode", ["code": code.uppercased()])
         AnalyticsService.shared.log(.partnerPaired)
         AnalyticsService.shared.setPairedProperty(true)
 

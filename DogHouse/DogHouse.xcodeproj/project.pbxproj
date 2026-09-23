@@ -16,6 +16,7 @@
 		52066D012F73000000C321C8 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 52066D002F73000000C321C8 /* GoogleSignIn */; };
 		52066D032F73000000C321C8 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 52066D022F73000000C321C8 /* GoogleSignInSwift */; };
 		52066E012F74000000C321C8 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */ = {isa = PBXBuildFile; productRef = 52066E002F74000000C321C8 /* FirebaseAnalyticsWithoutAdIdSupport */; };
+		52066F012F75000000C321C8 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 52066F002F75000000C321C8 /* RevenueCat */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -122,6 +123,7 @@
 				52066D012F73000000C321C8 /* GoogleSignIn in Frameworks */,
 				52066D032F73000000C321C8 /* GoogleSignInSwift in Frameworks */,
 				52066E012F74000000C321C8 /* FirebaseAnalyticsWithoutAdIdSupport in Frameworks */,
+				52066F012F75000000C321C8 /* RevenueCat in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -202,6 +204,7 @@
 				52066D002F73000000C321C8 /* GoogleSignIn */,
 				52066D022F73000000C321C8 /* GoogleSignInSwift */,
 				52066E002F74000000C321C8 /* FirebaseAnalyticsWithoutAdIdSupport */,
+				52066F002F75000000C321C8 /* RevenueCat */,
 			);
 			productName = DogHouse;
 			productReference = 520664792F6EF32C00C321C8 /* DogHouse.app */;
@@ -313,6 +316,7 @@
 			packageReferences = (
 				5206651C2F6F511800C321C8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				52066D042F73000000C321C8 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				52066F042F75000000C321C8 /* XCRemoteSwiftPackageReference "purchases-ios" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5206647A2F6EF32C00C321C8 /* Products */;
@@ -821,6 +825,14 @@
 				minimumVersion = 8.0.0;
 			};
 		};
+		52066F042F75000000C321C8 /* XCRemoteSwiftPackageReference "purchases-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -863,6 +875,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5206651C2F6F511800C321C8 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseAnalyticsWithoutAdIdSupport;
+		};
+		52066F002F75000000C321C8 /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 52066F042F75000000C321C8 /* XCRemoteSwiftPackageReference "purchases-ios" */;
+			productName = RevenueCat;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
