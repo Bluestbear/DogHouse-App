@@ -483,6 +483,26 @@ describe("feedPosts", () => {
       { [`reactions.${MALLORY}`]: deleteField() }));
   });
 
+  test("the sender and the dog cannot react to or roast their own post", async () => {
+    await assertFails(updateDoc(doc(as(ALICE), "feedPosts", "post1"),
+      { [`reactions.${ALICE}`]: "back" }));
+    await assertFails(updateDoc(doc(as(BOB), "feedPosts", "post1"),
+      { [`reactions.${BOB}`]: "dog" }));
+    await assertFails(updateDoc(doc(as(BOB), "feedPosts", "post1"),
+      { [`roasts.${BOB}`]: "FREE MY BOY" }));
+  });
+
+  test("the couple may still clear a reaction left from before", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), "feedPosts", "post1"),
+        { [`reactions.${ALICE}`]: "back", [`roasts.${ALICE}`]: "The audacity!" });
+    });
+    await assertSucceeds(updateDoc(doc(as(ALICE), "feedPosts", "post1"),
+      { [`reactions.${ALICE}`]: deleteField() }));
+    await assertSucceeds(updateDoc(doc(as(ALICE), "feedPosts", "post1"),
+      { [`roasts.${ALICE}`]: deleteField() }));
+  });
+
   test("audience member cannot rewrite the post itself", async () => {
     await assertFails(updateDoc(doc(as(MALLORY), "feedPosts", "post1"),
       { reason: "something else entirely" }));

@@ -206,7 +206,15 @@ service cloud.firestore {
             || request.resource.data.reactions[request.auth.uid] in ['back', 'dog'])
         && (!(request.auth.uid in request.resource.data.get('roasts', {}))
             || (request.resource.data.roasts[request.auth.uid] is string
-                && request.resource.data.roasts[request.auth.uid].size() <= 60));
+                && request.resource.data.roasts[request.auth.uid].size() <= 60))
+        // The couple in the post don't react to or roast their own sending:
+        // they can't add or change their entry, only clear an old one.
+        && (!(request.auth.uid in [resource.data.senderId, resource.data.receiverId])
+            || !(request.resource.data.get('reactions', {}).diff(resource.data.get('reactions', {})).addedKeys()
+                   .union(request.resource.data.get('reactions', {}).diff(resource.data.get('reactions', {})).changedKeys())
+                   .union(request.resource.data.get('roasts', {}).diff(resource.data.get('roasts', {})).addedKeys())
+                   .union(request.resource.data.get('roasts', {}).diff(resource.data.get('roasts', {})).changedKeys())
+                   .hasAny([request.auth.uid])));
     }
 
     // Feedback (complaints/suggestions) — create-only, as yourself. The
