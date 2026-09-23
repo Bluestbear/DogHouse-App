@@ -84,6 +84,14 @@ struct ShopTabView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .dhPageBackground()
+            // With the navigation bar hidden nothing covers the status bar,
+            // so scrolled cards ran under the clock. A strip of page colour
+            // over the top safe area keeps them behind it.
+            .overlay(alignment: .top) {
+                Color.canvasTop
+                    .ignoresSafeArea(edges: .top)
+                    .frame(height: 0)
+            }
             .sheet(isPresented: $showingTreatPacks) {
                 TreatPackSheet()
                     .environmentObject(authService)
@@ -166,6 +174,14 @@ struct ShopTabView: View {
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
             }
             .frame(height: 160)
+            // Tall hats reach above the avatar's frame; keep them clear of
+            // the stage's top edge.
+            .padding(.top, 32)
+            .frame(maxWidth: .infinity)
+            // A warm stage, like the item tiles, so white pieces (Chef's
+            // Hat) don't vanish into the white card.
+            .background(Color.canvasTop, in: RoundedRectangle(cornerRadius: 18))
+            .clipShape(RoundedRectangle(cornerRadius: 18))
 
             VStack(spacing: 8) {
                 Text(displayedName)
@@ -201,7 +217,7 @@ struct ShopTabView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(item.primaryColor.opacity(0.14))
+        .background(tileTint(for: item).opacity(0.14))
         .clipShape(Capsule())
     }
 
@@ -342,7 +358,7 @@ struct ShopTabView: View {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(
                         LinearGradient(
-                            colors: [item.primaryColor.opacity(0.22), item.accentColor.opacity(0.08)],
+                            colors: [tileTint(for: item).opacity(0.22), item.accentColor.opacity(0.08)],
                             startPoint: .topLeading, endPoint: .bottomTrailing
                         )
                     )
@@ -354,7 +370,8 @@ struct ShopTabView: View {
                     cosmetics: previewCosmetics,
                     blinks: false
                 )
-                .padding(.top, 8)
+                // Sits low in the tile so hat tips clear the top edge.
+                .padding(.top, 24)
 
                 if isEquipped || isOwned {
                     statusBadge(isEquipped ? "Wearing" : "Owned",
@@ -363,7 +380,7 @@ struct ShopTabView: View {
                         .padding(8)
                 }
             }
-            .frame(height: 132)
+            .frame(height: 140)
 
             // Name + price line
             VStack(spacing: 2) {
@@ -445,6 +462,16 @@ struct ShopTabView: View {
     }
 
     // MARK: - Helpers
+
+    /// The colour an item's tile and outfit chip are tinted with. Near-white
+    /// items (Chef's Hat, Bone Charm) would tint them white and vanish, so
+    /// they get the page's warm brown instead.
+    private func tileTint(for item: CosmeticItem) -> Color {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(item.primaryColor).getRed(&r, green: &g, blue: &b, alpha: &a)
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return luminance > 0.9 ? Color.dogHouseBrown : item.primaryColor
+    }
 
     private func isEquippedOnTarget(_ item: CosmeticItem) -> Bool {
         let equipped = shopTarget == .me ? myCosmetics : partnerCosmetics

@@ -376,8 +376,12 @@ struct AvatarView: View {
     }
 
     // MARK: - Hat Cosmetics
-    // Head top is at y = -33*scale from ZStack center.
-    // Each hat's bottom edge is positioned there.
+    // Head top is at y = -33*scale from ZStack center, but the head is a
+    // circle (centre y = -8, radius 25), so a flat base resting on that
+    // single point hovers above the curve. Each hat's bottom edge instead
+    // sits where its base's corners meet the head: y = -8 - sqrt(25² - (w/2)²)
+    // for base width w. Wide brims (cowboy, wizard) are seated by their
+    // crown and overhang, as brims do.
 
     @ViewBuilder
     private func hatView(_ item: CosmeticItem) -> some View {
@@ -411,7 +415,7 @@ struct AvatarView: View {
                 .offset(y: -20 * scale)
         }
         .frame(width: 36 * scale, height: 26 * scale)
-        .offset(y: -(33 + 13) * scale)
+        .offset(y: -(26 + 13) * scale)   // beanie, 36 wide, hugs the head
     }
 
     private func wizardHat(_ item: CosmeticItem) -> some View {
@@ -424,6 +428,9 @@ struct AvatarView: View {
                 path.closeSubpath()
             }
             .fill(LinearGradient(colors: [item.primaryColor, item.accentColor], startPoint: .top, endPoint: .bottom))
+            // Pin the cone's frame: the wider brim widens the ZStack, and a
+            // Path draws from its top-left, which pushed the cone off-centre.
+            .frame(width: 30 * scale, height: 34 * scale)
             // Brim
             Capsule()
                 .fill(item.primaryColor)
@@ -437,10 +444,10 @@ struct AvatarView: View {
             Image(systemName: "sparkle")
                 .font(.system(size: 5 * scale))
                 .foregroundStyle(item.accentColor)
-                .offset(x: 3 * scale, y: 18 * scale)
+                .offset(x: -5 * scale, y: 9 * scale)
         }
         .frame(width: 30 * scale, height: 34 * scale)
-        .offset(y: -(33 + 17) * scale)
+        .offset(y: -(28 + 17) * scale)   // seated by its 30-wide cone
     }
 
     private func haloHat(_ item: CosmeticItem) -> some View {
@@ -464,6 +471,7 @@ struct AvatarView: View {
                 path.closeSubpath()
             }
             .fill(LinearGradient(colors: [item.primaryColor, item.accentColor], startPoint: .top, endPoint: .bottom))
+            .frame(width: 24 * scale, height: 27 * scale) // see wizardHat
             // Accent band at base
             Capsule()
                 .fill(item.accentColor)
@@ -476,7 +484,7 @@ struct AvatarView: View {
                 .offset(y: -12 * scale)
         }
         .frame(width: 24 * scale, height: 27 * scale)
-        .offset(y: -(33 + 13.5) * scale)
+        .offset(y: -(29 + 13.5) * scale) // 26-wide band
     }
 
     private func crownHat(_ item: CosmeticItem) -> some View {
@@ -508,7 +516,7 @@ struct AvatarView: View {
             .offset(y: -2 * scale)
         }
         .frame(width: 38 * scale, height: 20 * scale)
-        .offset(y: -(33 + 10) * scale)
+        .offset(y: -(25 + 10) * scale)   // 38-wide band
     }
 
     private func cowboyHat(_ item: CosmeticItem) -> some View {
@@ -529,7 +537,7 @@ struct AvatarView: View {
                 .frame(width: 50 * scale, height: 7 * scale)
         }
         .frame(width: 50 * scale, height: 25 * scale)
-        .offset(y: -(33 + 12.5) * scale)
+        .offset(y: -(28 + 12.5) * scale) // seated by its 30-wide dome
     }
 
     private func chefHat(_ item: CosmeticItem) -> some View {
@@ -549,7 +557,7 @@ struct AvatarView: View {
                 .frame(width: 28 * scale, height: 5 * scale)
         }
         .frame(width: 28 * scale, height: 28 * scale)
-        .offset(y: -(33 + 14) * scale)
+        .offset(y: -(29 + 14) * scale)   // 28-wide body
     }
 
     // MARK: - Glasses Cosmetics
