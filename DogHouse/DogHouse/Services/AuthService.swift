@@ -78,7 +78,8 @@ class AuthService: ObservableObject {
     /// `-demoFriends`: the same, for the Friends tab and its mock feed.
     static let isDemoFriends = isDemo && ProcessInfo.processInfo.arguments.contains("-demoFriends")
     /// A screenshot demo that opens straight on one tab, gates cleared.
-    static let isDemoTab = isDemoShop || isDemoFriends
+    /// A demo doghouse stint (`-demoDoghouseHours`) counts too: it is there to show the scene.
+    static let isDemoTab = isDemoShop || isDemoFriends || DoghouseService.demoDoghouseHours != nil
 
     private func configureDemo() {
         isAuthInitialized = true
