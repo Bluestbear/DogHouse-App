@@ -45,6 +45,9 @@ struct HomeView: View {
     /// nil until the first level reading of the session — see checkForLevelUp.
     @State private var lastSeenLevel: RoomLevel?
     @State private var showSendAnimation = false
+    /// Set when a send succeeds; the kick starts once the sheet is gone, so
+    /// it doesn't play underneath the sheet as it slides away.
+    @State private var sendAnimationPending = false
     @State private var showReleaseAnimation = false
     @State private var errorMessage: String?
     @State private var showTasksSheet = false
@@ -303,6 +306,16 @@ struct HomeView: View {
                     try? await Task.sleep(for: .seconds(60))
                 }
             }
+            #if DEBUG
+            // `-demoKick` (with `-demoOnboarding -demoHome`): play the send
+            // animation once the splash is gone, for recording it on the sim.
+            .task {
+                guard AuthService.isDemo,
+                      ProcessInfo.processInfo.arguments.contains("-demoKick") else { return }
+                try? await Task.sleep(for: .seconds(2.5))
+                showSendAnimation = true
+            }
+            #endif
             // Coming back from the background: the clock moved on without us,
             // so refresh immediately instead of showing a stale reading until
             // the next minute poll comes round.
@@ -404,15 +417,23 @@ struct HomeView: View {
                 withAnimation { showAchievementToast = false }
             }
         }
-        .sheet(isPresented: $showSendSheet) {
+        .sheet(isPresented: $showSendSheet, onDismiss: {
+            guard sendAnimationPending else { return }
+            sendAnimationPending = false
+            showSendAnimation = true
+        }) {
             SendToDoghouseSheet(doghouseService: doghouseService, partnerName: partnerName, onSent: {
-                showSendAnimation = true
+                sendAnimationPending = true
             })
             .presentationDetents([.large])
         }
         .overlay {
             if showSendAnimation {
-                SendToDogHouseAnimation(partnerName: partnerName) {
+                SendToDogHouseAnimation(
+                    partnerName: partnerName,
+                    avatarId: partnerAvatarId,
+                    cosmetics: partnerCosmetics
+                ) {
                     showSendAnimation = false
                 }
                 .zIndex(100)
