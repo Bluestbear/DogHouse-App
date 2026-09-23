@@ -93,3 +93,9 @@ build/
 # VS Code local config
 .vscode/
 *.code-workspace
+
+# Local working files (launch video output, marketing scratch, QA runs)
+DogHouse/brag-output/
+Marketing/App Images/
+Marketing/Neuer Ordner.zip
+QA-Run-*/
