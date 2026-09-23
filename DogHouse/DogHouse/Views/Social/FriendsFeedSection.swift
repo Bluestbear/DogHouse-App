@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import OSLog
 
 // MARK: - Jailbreak Vote Banner
 
@@ -98,6 +99,10 @@ struct FeedPostCard: View {
     @State private var reportTarget: ReportTarget?
     @State private var userToBlock: (id: String, name: String)?
 
+    /// My own couple's sending: shown as mine, and not reactable
+    private var isOwnPost: Bool { post.involves(feedService.userId) }
+    private var iSent: Bool { post.senderId == feedService.userId }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Header: who sent whom
@@ -115,12 +120,15 @@ struct FeedPostCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(Text(post.senderName).bold()) sent \(Text(post.receiverName).bold()) to the DogHouse")
+                    headline
                         .font(.subheadline)
 
                     // "Sent X to the DogHouse" already says they're in, so an
                     // active post needs no badge; only a finished one says so.
                     HStack(spacing: 4) {
+                        if isOwnPost {
+                            ownTag
+                        }
                         Text("\(Text(post.createdAt, style: .relative)) ago")
                         if let outcome {
                             Text("·")
@@ -134,7 +142,10 @@ struct FeedPostCard: View {
 
                 Spacer(minLength: 0)
 
-                moderationMenu
+                // Nothing to report or block on my own couple's post
+                if !isOwnPost {
+                    moderationMenu
+                }
             }
 
             // Reason
@@ -146,30 +157,48 @@ struct FeedPostCard: View {
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
-            // Reactions + roast menu
-            // Full labels when they fit on one line, emoji + count when not,
-            // so a pill never wraps mid-word.
-            ViewThatFits(in: .horizontal) {
-                reactionRow(compact: false)
-                reactionRow(compact: true)
+            // Reaction tally right under the message, so a tap visibly lands
+            if post.backCount + post.dogCount > 0 {
+                reactionTally
+                    .transition(.scale(scale: 0.6, anchor: .leading).combined(with: .opacity))
             }
 
-            // Latest roasts
+            // Reactions + roast menu, for friends only: my own post just
+            // shows what friends made of it.
+            // Full labels when they fit on one line, emoji + count when not,
+            // so a pill never wraps mid-word.
+            if !isOwnPost {
+                ViewThatFits(in: .horizontal) {
+                    reactionRow(compact: false)
+                    reactionRow(compact: true)
+                }
+            } else if (post.reactions ?? [:]).isEmpty && (post.roasts ?? [:]).isEmpty {
+                Text("No reactions yet. Friends can back it, free the dog or roast.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+            }
+
+            // Every roast written out, one line each, even when two friends
+            // picked the same one. Keyed by roaster so the order holds still.
             if let roasts = post.roasts, !roasts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(roasts.values.sorted().prefix(3), id: \.self) { roast in
+                    ForEach(roasts.sorted { $0.key < $1.key }, id: \.key) { entry in
                         HStack(spacing: 6) {
                             Text("🔥")
                                 .font(.caption2)
-                            Text(roast)
+                            Text(entry.value)
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
+                .padding(.leading, 4)
             }
         }
         .padding(.vertical, 6)
+        .animation(.spring(response: 0.35, dampingFraction: 0.6), value: post.reactions)
+        .animation(.spring(response: 0.35, dampingFraction: 0.6), value: post.roasts)
         .sheet(isPresented: Binding(
             get: { reportTarget != nil },
             set: { if !$0 { reportTarget = nil } }
@@ -192,6 +221,26 @@ struct FeedPostCard: View {
         } message: {
             Text("You'll stop seeing their sendings and the couple friendship is removed. They aren't told.")
         }
+    }
+
+    private var headline: Text {
+        if iSent {
+            return Text("\(Text("You").bold()) sent \(Text(post.receiverName).bold()) to the DogHouse")
+        }
+        if post.receiverId == feedService.userId {
+            return Text("\(Text(post.senderName).bold()) sent \(Text("you").bold()) to the DogHouse")
+        }
+        return Text("\(Text(post.senderName).bold()) sent \(Text(post.receiverName).bold()) to the DogHouse")
+    }
+
+    private var ownTag: some View {
+        Text(iSent ? "Your send" : "About you")
+            .font(.caption2.bold())
+            .foregroundStyle(Color.cozyOrange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Color.cozyOrange.opacity(0.15))
+            .clipShape(Capsule())
     }
 
     /// Report / block, required for anything other people wrote
@@ -228,13 +277,13 @@ struct FeedPostCard: View {
             ForEach(CannedRoast.all, id: \.self) { roast in
                 Button(roast) {
                     HapticService.shared.success()
-                    Task { try? await feedService.roast(post, with: roast) }
+                    Task { await setRoast(roast) }
                 }
             }
             if post.roasts?[feedService.userId] != nil {
                 Divider()
                 Button("Remove my roast", role: .destructive) {
-                    Task { try? await feedService.roast(post, with: nil) }
+                    Task { await setRoast(nil) }
                 }
             }
         } label: {
@@ -243,10 +292,6 @@ struct FeedPostCard: View {
                 if !compact {
                     Text("Roast")
                         .font(.caption.weight(.semibold))
-                }
-                if let count = post.roasts?.count, count > 0 {
-                    Text("\(count)")
-                        .font(.caption.bold().monospacedDigit())
                 }
             }
             .padding(.horizontal, 10)
@@ -262,6 +307,39 @@ struct FeedPostCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Roast")
+    }
+
+    private func setRoast(_ text: String?) async {
+        do {
+            try await feedService.roast(post, with: text)
+        } catch {
+            Logger.data.error("Roast failed: \(error.localizedDescription, privacy: .public)")
+            HapticService.shared.error()
+        }
+    }
+
+    // MARK: Reaction tally
+
+    /// "❤️ 2  🐶 1": reactions stack into counts; everyone knows what the
+    /// heart and the dog mean, so they aren't written out.
+    private var reactionTally: some View {
+        HStack(spacing: 6) {
+            ForEach([FeedReaction.back, .dog], id: \.self) { kind in
+                let count = kind == .back ? post.backCount : post.dogCount
+                if count > 0 {
+                    Text("\(kind.emoji) \(count)")
+                        .font(.caption.bold().monospacedDigit())
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color(.systemGray6))
+                        .clipShape(Capsule())
+                        .contentTransition(.numericText())
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                        .accessibilityLabel(kind == .back ? "Backed by \(count)" : "\(count) want the dog freed")
+                }
+            }
+        }
+        .padding(.leading, 4)
     }
 
     /// How a finished stint ended, shown beside the timestamp. nil while
@@ -286,17 +364,20 @@ struct FeedPostCard: View {
         let isMine = myReaction == reaction
         return Button {
             HapticService.shared.success()
-            Task { try? await feedService.react(to: post, with: reaction) }
+            Task {
+                do {
+                    try await feedService.react(to: post, with: reaction)
+                } catch {
+                    Logger.data.error("Reaction failed: \(error.localizedDescription, privacy: .public)")
+                    HapticService.shared.error()
+                }
+            }
         } label: {
             HStack(spacing: 4) {
                 Text(reaction.emoji)
                 if !compact {
                     Text(label)
                         .font(.caption.weight(.semibold))
-                }
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.caption.bold().monospacedDigit())
                 }
             }
             .lineLimit(1)

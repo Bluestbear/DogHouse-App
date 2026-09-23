@@ -278,6 +278,7 @@ class DoghouseService: ObservableObject {
                 reason: reason, suggestion: suggestion,
                 startedAt: Date(), endedAt: nil, isActive: true
             )
+            if isPublic { FeedService.demoShare(reason: reason) }
             return
         }
         #endif

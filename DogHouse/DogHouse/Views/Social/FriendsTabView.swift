@@ -35,9 +35,12 @@ struct FriendsTabView: View {
                     JointVoteBanner(vote: vote) { openVote = vote }
                 }
 
-                // Friends feed — public sendings
-                if !visiblePosts.isEmpty {
-                    feedSection
+                // My couple's public sendings, then friends'
+                if !ownPosts.isEmpty {
+                    postsSection("Your Sends", posts: ownPosts)
+                }
+                if !friendPosts.isEmpty {
+                    postsSection("Feed 📣", posts: friendPosts)
                 }
 
                 // Top Dog — most time served among friends this week
@@ -84,6 +87,7 @@ struct FriendsTabView: View {
             }
             .task(id: authService.userProfile?.id) {
                 moderation.configure(userId: authService.userProfile?.id)
+                feedService.configure(userId: authService.userProfile?.id)
             }
             .alert("Block this couple?", isPresented: .init(
                 get: { coupleToBlock != nil },
@@ -149,13 +153,22 @@ struct FriendsTabView: View {
 
     // MARK: - Feed Section
 
-    private var feedSection: some View {
+    /// Sendings I made or was sent by, kept apart from friends' posts
+    private var ownPosts: [FeedPost] {
+        visiblePosts.filter { $0.involves(feedService.userId) }
+    }
+
+    private var friendPosts: [FeedPost] {
+        visiblePosts.filter { !$0.involves(feedService.userId) }
+    }
+
+    private func postsSection(_ title: String, posts: [FeedPost]) -> some View {
         Section {
-            ForEach(visiblePosts) { post in
+            ForEach(posts) { post in
                 FeedPostCard(post: post, feedService: feedService)
             }
         } header: {
-            Text("The Feed 📣")
+            Text(title)
         }
     }
 

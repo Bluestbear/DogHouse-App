@@ -40,6 +40,11 @@ struct FeedPost: Codable, Identifiable, Equatable {
         (reactions ?? [:]).values.filter { $0 == FeedReaction.dog.rawValue }.count
     }
 
+    /// The sender or the dog: their own couple's post, which they don't react to
+    func involves(_ userId: String) -> Bool {
+        senderId == userId || receiverId == userId
+    }
+
     func reaction(of userId: String) -> FeedReaction? {
         guard let raw = reactions?[userId] else { return nil }
         return FeedReaction(rawValue: raw)
