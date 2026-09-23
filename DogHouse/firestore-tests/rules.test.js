@@ -111,6 +111,13 @@ describe("users", () => {
     await assertFails(updateDoc(doc(as(MALLORY), "users", ALICE), { displayName: "pwned" }));
   });
 
+  test("a partner cannot dress the other's dog", async () => {
+    // Gifts land in ownedItemIds server-side; only the owner equips them.
+    await assertFails(updateDoc(doc(as(BOB), "users", ALICE), {
+      equippedItemIds: { hat: "hat_beanie" },
+    }));
+  });
+
   test("secrets cannot be written back onto the public document", async () => {
     await assertFails(updateDoc(doc(as(ALICE), "users", ALICE), { fcmToken: "leak" }));
     await assertFails(updateDoc(doc(as(ALICE), "users", ALICE), { partnerCode: "LEAK01" }));

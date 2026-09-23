@@ -148,7 +148,7 @@ function coupleKeyOf(a: string, b: string): string {
  * Partner-scoped actions must check BOTH halves of the link. `partnerId` on
  * the caller's own document is self-asserted (owner-writable by rule), so on
  * its own it proves nothing: anyone could point it at a stranger's uid and
- * then send them to the doghouse, gift or equip on them, or deliver wishes.
+ * then send them to the doghouse, gift to them, or deliver wishes.
  * The partner's document pointing back is the proof.
  */
 function requireMutualPartner(
@@ -1589,35 +1589,30 @@ export const purchaseCosmetic = onCall({ region: REGION }, async (req) => {
   });
 });
 
-// Equip / unequip a cosmetic on self or partner (validates ownership).
+// Equip / unequip a cosmetic on your own dog (validates ownership). Gifts
+// land in the partner's wardrobe, but only they choose to wear them.
 export const equipCosmetic = onCall({ region: REGION }, async (req) => {
   const uid = requireAuth(req);
   const itemId: string | null = req.data?.itemId ?? null; // null = unequip
   const category: string = req.data?.category;
-  const forPartner = req.data?.forPartner === true;
   if (!category) throw new HttpsError("invalid-argument", "Missing category.");
-
-  const me = (await db.collection("users").doc(uid).get()).data() ?? {};
-  let targetId = uid;
-  if (forPartner) {
-    const claimed = me.partnerId as string | undefined;
-    const partner = claimed && claimed !== "skipped" ?
-      (await db.collection("users").doc(claimed).get()).data() : undefined;
-    targetId = requireMutualPartner(uid, claimed, partner);
+  if (req.data?.forPartner === true) {
+    throw new HttpsError("permission-denied",
+      "Only your partner can choose what their dog wears.");
   }
 
-  const targetRef = db.collection("users").doc(targetId);
+  const meRef = db.collection("users").doc(uid);
   if (itemId) {
     if (categoryOf(itemId) !== category) {
       throw new HttpsError("invalid-argument", "Item/category mismatch.");
     }
-    const owned: string[] = (await targetRef.get()).data()?.ownedItemIds ?? [];
+    const owned: string[] = (await meRef.get()).data()?.ownedItemIds ?? [];
     if (!owned.includes(itemId)) {
-      throw new HttpsError("failed-precondition", "That dog doesn't own this item.");
+      throw new HttpsError("failed-precondition", "Your dog doesn't own this item.");
     }
-    await targetRef.update({ [`equippedItemIds.${category}`]: itemId });
+    await meRef.update({ [`equippedItemIds.${category}`]: itemId });
   } else {
-    await targetRef.update({ [`equippedItemIds.${category}`]: FieldValue.delete() });
+    await meRef.update({ [`equippedItemIds.${category}`]: FieldValue.delete() });
   }
   return { ok: true };
 });

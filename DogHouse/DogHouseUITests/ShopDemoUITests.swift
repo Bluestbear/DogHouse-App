@@ -50,7 +50,7 @@ final class ShopDemoUITests: XCTestCase {
         sleep(1)
         snap("01-shop-my-dog")
 
-        // Dress the partner, then back.
+        // Peek at the partner's tab (gift only, no Wear), then back.
         button(containing: "Sam's Dog").tap()
         sleep(1)
         snap("02-shop-partner-dog")

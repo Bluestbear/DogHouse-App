@@ -30,7 +30,7 @@ class ShopService {
         ])
     }
 
-    // MARK: - Equip / Unequip (self or partner)
+    // MARK: - Equip / Unequip (own dog only; gifts are the partner's to wear)
 
     func equipOnSelf(_ item: CosmeticItem) async throws {
         try await cf.call("equipCosmetic", [
@@ -42,19 +42,6 @@ class ShopService {
     func unequipOnSelf(category: CosmeticCategory) async throws {
         try await cf.call("equipCosmetic", [
             "itemId": NSNull(), "category": category.rawValue, "forPartner": false
-        ])
-    }
-
-    func equipOnPartner(_ item: CosmeticItem, partnerId: String) async throws {
-        try await cf.call("equipCosmetic", [
-            "itemId": item.id, "category": item.category.rawValue, "forPartner": true
-        ])
-        AnalyticsService.shared.log(.equipCosmetic, ["item_id": item.id, "on_partner": true])
-    }
-
-    func unequipOnPartner(category: CosmeticCategory, partnerId: String) async throws {
-        try await cf.call("equipCosmetic", [
-            "itemId": NSNull(), "category": category.rawValue, "forPartner": true
         ])
     }
 

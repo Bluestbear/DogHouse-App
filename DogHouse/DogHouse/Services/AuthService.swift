@@ -139,18 +139,12 @@ class AuthService: ObservableObject {
         }
     }
 
-    /// Equip (`itemId`) or clear (`nil`) one category on me or my partner.
-    func demoEquip(_ itemId: String?, category: CosmeticCategory, forPartner: Bool) {
+    /// Equip (`itemId`) or clear (`nil`) one category on my own dog.
+    func demoEquip(_ itemId: String?, category: CosmeticCategory) {
         guard Self.isDemo else { return }
-        if forPartner {
-            var ids = partnerProfile?.equippedItemIds ?? [:]
-            ids[category.rawValue] = itemId
-            partnerProfile?.equippedItemIds = ids
-        } else {
-            var ids = userProfile?.equippedItemIds ?? [:]
-            ids[category.rawValue] = itemId
-            userProfile?.equippedItemIds = ids
-        }
+        var ids = userProfile?.equippedItemIds ?? [:]
+        ids[category.rawValue] = itemId
+        userProfile?.equippedItemIds = ids
     }
     #endif
 

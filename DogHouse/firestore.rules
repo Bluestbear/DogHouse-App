@@ -108,12 +108,8 @@ service cloud.firestore {
       // points back (see STAGED note there). Tests: the describe.skip block
       // "staged partnerId lockdown" in firestore-tests/rules.test.js.
 
-      // A partner may (legacy path) change only equipped cosmetics. Equipping
-      // is also available via the equipCosmetic callable; this stays for
-      // low-stakes direct writes and touches no economy field.
-      allow update: if authed()
-        && resource.data.partnerId == request.auth.uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['equippedItemIds']);
+      // No partner write path: you can gift your partner a cosmetic (via
+      // purchaseCosmetic) but only they decide whether their dog wears it.
     }
 
     // Owner-only private data: the push token and this account's pairing

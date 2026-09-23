@@ -419,13 +419,22 @@ struct ShopTabView: View {
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
+            } else if shopTarget == .partner {
+                // Theirs already; whether their dog wears it is their call.
+                Label("In their closet", systemImage: "hanger")
+                    .font(.dhCaptionBold)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .foregroundStyle(.secondary)
+                    .background(Color(.systemGray6))
+                    .clipShape(Capsule())
             } else {
                 Button {
                     HapticService.shared.lightTap()
                     if isEquipped {
-                        performAction { try await unequipOnTarget(item.category) }
+                        performAction { try await unequip(item.category) }
                     } else {
-                        performAction { try await equipOnTarget(item) }
+                        performAction { try await equip(item) }
                     }
                 } label: {
                     Label(isEquipped ? "Remove" : "Wear",
@@ -507,32 +516,25 @@ struct ShopTabView: View {
         HapticService.shared.success()
     }
 
-    private func equipOnTarget(_ item: CosmeticItem) async throws {
+    // Only ever called on the Me tab: gifts are the partner's to wear.
+    private func equip(_ item: CosmeticItem) async throws {
         #if DEBUG
         if AuthService.isDemo {
-            authService.demoEquip(item.id, category: item.category, forPartner: shopTarget == .partner)
+            authService.demoEquip(item.id, category: item.category)
             return
         }
         #endif
-        if shopTarget == .me {
-            try await shopService.equipOnSelf(item)
-        } else if let pid = partnerProfile?.id {
-            try await shopService.equipOnPartner(item, partnerId: pid)
-        }
+        try await shopService.equipOnSelf(item)
     }
 
-    private func unequipOnTarget(_ category: CosmeticCategory) async throws {
+    private func unequip(_ category: CosmeticCategory) async throws {
         #if DEBUG
         if AuthService.isDemo {
-            authService.demoEquip(nil, category: category, forPartner: shopTarget == .partner)
+            authService.demoEquip(nil, category: category)
             return
         }
         #endif
-        if shopTarget == .me {
-            try await shopService.unequipOnSelf(category: category)
-        } else if let pid = partnerProfile?.id {
-            try await shopService.unequipOnPartner(category: category, partnerId: pid)
-        }
+        try await shopService.unequipOnSelf(category: category)
     }
 
     private func performAction(_ action: @escaping () async throws -> Void) {
