@@ -300,7 +300,9 @@ struct DoghouseScene: View {
                 emptyBowl.offset(x: -94, y: 79).transition(.opacity)
             }
             if stage.showFlies { flies.offset(x: -72, y: 28).transition(.opacity) }
-            if stage.showMouse { mouse.offset(x: 82, y: 46).transition(.move(edge: .trailing).combined(with: .opacity)) }
+            // On the dirt patch, mirroring the bowl: the body's base (7pt below
+            // its centre) lands just in front of the wall's.
+            if stage.showMouse { mouse.offset(x: 94, y: 79).transition(.move(edge: .trailing).combined(with: .opacity)) }
             if stage.showLeaves { blownLeaves.transition(.opacity) }
         }
     }
