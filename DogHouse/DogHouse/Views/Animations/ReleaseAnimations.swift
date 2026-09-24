@@ -42,6 +42,9 @@ struct ReleaseFromDogHouseAnimation: View {
     var cosmetics: AvatarCosmetics = .none
     /// Pin a scene (previews); nil picks one at random per release.
     var fixedVariant: ReleaseVariant? = nil
+    /// Replaces the line under the headline (the freed dog's own phone says
+    /// what the release earned them).
+    var sublineOverride: String? = nil
     var onComplete: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -54,7 +57,8 @@ struct ReleaseFromDogHouseAnimation: View {
     }
 
     private var subline: String {
-        partnerName.isEmpty ? "Welcome home!" : "You let them out — welcome home, \(partnerName)!"
+        if let sublineOverride { return sublineOverride }
+        return partnerName.isEmpty ? "Welcome home!" : "You let them out — welcome home, \(partnerName)!"
     }
 
     var body: some View {

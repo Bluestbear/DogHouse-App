@@ -77,23 +77,25 @@ struct MyDoghouseInfoCard: View {
             // card, under their own heading — now plain rows separated by
             // hairlines, and only the ones you can act on.
             VStack(spacing: 0) {
-                if let suggestion = event.suggestion {
-                    if event.redemptionRequested == true {
-                        WayOutRow(
-                            symbol: "hourglass", tint: .cozyOrange,
-                            title: "Waiting for \(partnerName)",
-                            detail: "You said you made it up"
-                        )
-                    } else {
-                        WayOutRow(
-                            symbol: "checkmark.circle.fill", tint: .freedomGreen,
-                            title: "I did it", detail: suggestion,
-                            accessory: "paperplane.fill", accessoryTint: .freedomGreen,
-                            action: onRequestRedemption
-                        )
-                    }
-                    Divider()
+                // Always offered: the sender's suggestion is optional, and
+                // without this row a suggestion-less send left the dog no
+                // way to say they'd made it up.
+                if event.redemptionRequested == true {
+                    WayOutRow(
+                        symbol: "hourglass", tint: .cozyOrange,
+                        title: "Waiting for \(partnerName)",
+                        detail: "You said you made it up"
+                    )
+                } else {
+                    WayOutRow(
+                        symbol: "checkmark.circle.fill", tint: .freedomGreen,
+                        title: "I did it",
+                        detail: event.suggestion ?? "Tell \(partnerName) you made it up",
+                        accessory: "paperplane.fill", accessoryTint: .freedomGreen,
+                        action: onRequestRedemption
+                    )
                 }
+                Divider()
                 if coupleTasksLoaded {
                     WayOutRow(
                         symbol: "list.clipboard.fill", tint: .cozyOrange,

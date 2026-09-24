@@ -22,6 +22,14 @@ struct PartnerInDoghouseCard: View {
 
     private var byRedemption: Bool { event.redemptionRequested == true }
 
+    /// "Sent 2 hours ago", or "Sent just now" in the first minute — the
+    /// duration formatter says "just now" there, and "Sent just now ago"
+    /// read wrong.
+    private var sentLine: String {
+        let elapsed = now.timeIntervalSince(event.startedAt)
+        return elapsed < 60 ? "Sent just now" : "Sent \(elapsed.formattedDuration) ago"
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             // Partner's avatar + status
@@ -37,7 +45,7 @@ struct PartnerInDoghouseCard: View {
                     Text("\(partnerName) is in the DogHouse")
                         .font(.dhBodyBold)
                         .foregroundStyle(.red)
-                    Text("Sent \(now.timeIntervalSince(event.startedAt).formattedDuration) ago")
+                    Text(sentLine)
                         .font(.dhCaption)
                         .foregroundStyle(.secondary)
                 }
@@ -50,7 +58,8 @@ struct PartnerInDoghouseCard: View {
                 Text("Reason: \(event.reason)")
                     .font(.dhCaption)
                     .foregroundStyle(.secondary)
-                if let suggestion = event.suggestion {
+                // Once they claim it, the claim row below quotes it instead.
+                if let suggestion = event.suggestion, !byRedemption {
                     Text("To get out: \(suggestion)")
                         .font(.dhCaption)
                         .foregroundStyle(Color.cozyOrange)
@@ -104,6 +113,42 @@ struct PartnerInDoghouseCard: View {
         .padding(12)
         .background(Color.cozyOrange.opacity(0.15))
         .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// On my own page, while my partner is waiting for me to confirm their
+/// make-up: the confirm button is on their page, and this takes me there.
+struct PartnerMadeItUpBanner: View {
+    let partnerName: String
+    let suggestion: String?
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 10) {
+                Text("🦴")
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(partnerName) says they made it up!")
+                        .font(.dhBodyBold)
+                        .foregroundStyle(.primary)
+                    Text(suggestion.map { "\u{201C}\($0)\u{201D} · tap to confirm" } ?? "Tap to confirm")
+                        .font(.dhCaption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(12)
+            .background(Color.cozyOrange.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.doghouse)
+        .accessibilityLabel("\(partnerName) says they made it up. Show \(partnerName)'s page to confirm")
+        .padding(.horizontal, 20)
     }
 }
 

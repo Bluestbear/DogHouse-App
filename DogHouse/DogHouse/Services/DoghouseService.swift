@@ -43,6 +43,24 @@ class DoghouseService: ObservableObject {
     /// When roses were last sent TO ME — drives the bouquet next to my dog
     @Published var myRosesSentAt: Date?
 
+    /// My stay that just ended while the app was open (let out, make-up
+    /// confirmed, or voted out), confirmed closed by the server. Home plays
+    /// its own "YOU'RE FREE!" for it once, then clears this.
+    @Published var justReleasedEvent: DoghouseEvent?
+
+    /// True once history and both active-stay listeners have reported from
+    /// the server. Until then "no active stay" and "never released" only mean
+    /// "not loaded yet", and badges judged on them were false (QA-026).
+    var hasLoadedState: Bool {
+        #if DEBUG
+        if AuthService.isDemo || DoghouseService.demoDoghouseHours != nil { return true }
+        #endif
+        return historyLoaded && myEventLoaded && partnerEventLoaded
+    }
+    @Published private var historyLoaded = false
+    @Published private var myEventLoaded = false
+    @Published private var partnerEventLoaded = false
+
     /// When roses were last sent TO MY PARTNER — drives the bouquet next
     /// to their dog (visible to me, the sender, on their scene page)
     @Published var partnerRosesSentAt: Date?
@@ -138,15 +156,23 @@ class DoghouseService: ObservableObject {
                 guard let self else { return }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    if snapshot != nil { self.myEventLoaded = true }
                     if let doc = snapshot?.documents.first {
                         self.myDoghouseEvent = try? self.fs.decode(DoghouseEvent.self, from: doc)
                     } else {
                         // Immunity on release is now granted server-side by the
                         // releasePartner callable / vote resolver.
-                        let wasActive = self.myDoghouseEvent != nil
+                        let ended = self.myDoghouseEvent
                         self.myDoghouseEvent = nil
                         // A release just closed an event — pull the new history.
-                        if wasActive { Task { await self.refreshHistory() } }
+                        if let ended {
+                            Task { await self.refreshHistory() }
+                            // A listener error also lands here (no snapshot),
+                            // so only a real, server-confirmed close counts.
+                            if snapshot != nil, error == nil {
+                                Task { await self.confirmRelease(of: ended) }
+                            }
+                        }
                     }
                 }
             }
@@ -162,6 +188,7 @@ class DoghouseService: ObservableObject {
                 guard let self else { return }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    if snapshot != nil { self.partnerEventLoaded = true }
                     if let doc = snapshot?.documents.first {
                         self.partnerDoghouseEvent = try? self.fs.decode(DoghouseEvent.self, from: doc)
                     } else {
@@ -251,6 +278,7 @@ class DoghouseService: ObservableObject {
                 try? fs.decode(DoghouseEvent.self, from: $0)
             }
             mergeHistory()
+            historyLoaded = true
         } catch {
             Logger.data.error("History refresh failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -293,6 +321,20 @@ class DoghouseService: ObservableObject {
             "has_suggestion": suggestion?.isEmpty == false
         ])
         // Snapshot listeners will update both devices
+    }
+
+    /// Publishes `justReleasedEvent` if the stay I was just watching really
+    /// ended on the server — the listener going empty isn't proof on its own.
+    private func confirmRelease(of event: DoghouseEvent) async {
+        do {
+            let doc = try await fs.doghouseEventsCollection.document(event.id)
+                .getDocument(source: .server)
+            guard let closed = try? fs.decode(DoghouseEvent.self, from: doc),
+                  !closed.isActive, closed.receiverId == userId else { return }
+            justReleasedEvent = closed
+        } catch {
+            Logger.data.error("Release check failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// The dog marks the make-it-up suggestion as done; the sender gets a

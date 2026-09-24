@@ -49,6 +49,12 @@ struct HomeView: View {
     /// it doesn't play underneath the sheet as it slides away.
     @State private var sendAnimationPending = false
     @State private var showReleaseAnimation = false
+    /// My own stay just ended while I was watching: my phone gets its own
+    /// "YOU'RE FREE!" (the sender's phone plays theirs on the tap).
+    @State private var myRelease: DoghouseEvent?
+    /// I was sent while looking at my partner's page — the page flips back
+    /// to my dog and this says why.
+    @State private var showSentToast = false
     @State private var errorMessage: String?
     @State private var showTasksSheet = false
     @State private var showAchievementsSheet = false
@@ -156,6 +162,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     greetingHeader
+                        .id("home-top")
 
                     // Notifications disabled — the app can't work without them
                     if notificationService.authStatus == .denied {
@@ -201,6 +208,17 @@ struct HomeView: View {
                     // meter take their place directly under the window.
                     VStack(spacing: 20) {
                         if scenePageIndex == 0 {
+                            // My partner says they made it up — the confirm
+                            // button lives on their page, so point there.
+                            if let claim = doghouseService.partnerDoghouseEvent,
+                               claim.redemptionRequested == true {
+                                PartnerMadeItUpBanner(
+                                    partnerName: partnerName,
+                                    suggestion: claim.suggestion
+                                ) {
+                                    withAnimation(.easeInOut(duration: 0.35)) { scenePageIndex = 1 }
+                                }
+                            }
                             myStatusDetail
                         } else {
                             partnerControlsSection
@@ -230,6 +248,22 @@ struct HomeView: View {
                         break
                     }
                 }
+            }
+            // A make-up claim adds a row to the partner card, which pushes
+            // the confirm button under the tab bar: bring it into view when
+            // the claim lands, or when I swipe over to answer it.
+            .onChange(of: partnerClaimPending) { wasPending, pending in
+                if pending { scrollToRelease(proxy) }
+                // Released: the card is gone, so go back to the top rather
+                // than leave the greeting tucked under the toolbar.
+                if wasPending, !pending {
+                    withAnimation(.easeInOut(duration: 0.4)) {
+                        proxy.scrollTo("home-top", anchor: .top)
+                    }
+                }
+            }
+            .onChange(of: scenePageIndex) { _, _ in
+                if partnerClaimPending { scrollToRelease(proxy) }
             }
             // The greeting header stands in for the title.
             .navigationTitle("")
@@ -338,6 +372,10 @@ struct HomeView: View {
             .animation(.spring(duration: 0.5), value: doghouseService.partnerDoghouseEvent?.id)
             .overlay(alignment: .top) {
                 VStack(spacing: 8) {
+                    if showSentToast {
+                        sentToDoghouseToast
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                     if showBellyRubToast {
                         bellyRubReceivedToast
                             .transition(.move(edge: .top).combined(with: .opacity))
@@ -410,7 +448,17 @@ struct HomeView: View {
             evaluateAchievements()
         }
         .onChange(of: doghouseService.doghouseHistory.count) { evaluateAchievements() }
-        .onChange(of: doghouseService.myDoghouseEvent?.id) { evaluateAchievements() }
+        .onChange(of: doghouseService.hasLoadedState) { evaluateAchievements() }
+        .onChange(of: doghouseService.myDoghouseEvent?.id) { old, new in
+            evaluateAchievements()
+            if old == nil, new != nil { showMyNewStay() }
+        }
+        .onChange(of: doghouseService.justReleasedEvent?.id) { _, id in
+            guard id != nil, let freed = doghouseService.justReleasedEvent else { return }
+            doghouseService.justReleasedEvent = nil
+            myRelease = freed
+            SoundService.shared.playRelease()
+        }
         .onChange(of: doghouseService.partnerDoghouseEvent?.id) { evaluateAchievements() }
         .onChange(of: challengeService.challenges.count) { evaluateAchievements() }
         .onChange(of: achievements.counters) { evaluateAchievements() }
@@ -456,6 +504,32 @@ struct HomeView: View {
                 }
                 .zIndex(100)
             }
+            if let freed = myRelease {
+                ReleaseFromDogHouseAnimation(
+                    avatarId: myAvatarId,
+                    cosmetics: myCosmetics,
+                    sublineOverride: freed.releasedBy == "redemption"
+                        ? "You made it up: treats for you, and an hour of immunity"
+                        : "Welcome home! You're immune for an hour"
+                ) {
+                    myRelease = nil
+                }
+                .zIndex(100)
+            }
+        }
+    }
+
+    /// I've just been sent (the listener saw a new stay). If I was looking at
+    /// my partner's page, nothing on screen would change, so flip back to my
+    /// own dog and say so. A cold launch starts on my page: no toast then.
+    private func showMyNewStay() {
+        guard scenePageIndex != 0, !tour.isActive else { return }
+        HapticService.shared.warning()
+        withAnimation(.easeInOut(duration: 0.35)) { scenePageIndex = 0 }
+        withAnimation(.spring(duration: 0.4)) { showSentToast = true }
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            withAnimation { showSentToast = false }
         }
     }
 
@@ -751,6 +825,7 @@ struct HomeView: View {
                 now: currentDate,
                 onRelease: { releasePartner(event: partnerEvent) }
             )
+            .id("partner-release")
         } else {
             // My partner is NOT in the doghouse — show send button
             partnerFreeSection
@@ -783,6 +858,21 @@ struct HomeView: View {
         )
         .tourAnchor(.sendButton, horizontalInset: 20)
         .id("tour-send")
+    }
+
+    private var partnerClaimPending: Bool {
+        doghouseService.partnerDoghouseEvent?.redemptionRequested == true
+    }
+
+    private func scrollToRelease(_ proxy: ScrollViewProxy) {
+        guard scenePageIndex == 1, partnerClaimPending, !tour.isActive else { return }
+        Task {
+            // Let the card grow (and the page settle) before measuring.
+            try? await Task.sleep(for: .milliseconds(400))
+            withAnimation(.easeInOut(duration: 0.4)) {
+                proxy.scrollTo("partner-release", anchor: .bottom)
+            }
+        }
     }
 
     /// Let the partner out. Confirming a redemption claim also rewards treats,
@@ -889,7 +979,8 @@ struct HomeView: View {
     }
 
     private func evaluateAchievements() {
-        guard let snapshot = achievementSnapshot else { return }
+        guard doghouseService.hasLoadedState,
+              let snapshot = achievementSnapshot else { return }
         achievements.evaluate(snapshot)
     }
 
@@ -1006,6 +1097,14 @@ struct HomeView: View {
             Image(systemName: "star.fill")
                 .foregroundStyle(.yellow)
             Text("\(currentRoomLevel.unlockMessage)")
+                .font(.dhCaptionBold)
+        }
+    }
+
+    private var sentToDoghouseToast: some View {
+        HomeToast {
+            Text("🐕")
+            Text("\(partnerName) sent you to the DogHouse")
                 .font(.dhCaptionBold)
         }
     }

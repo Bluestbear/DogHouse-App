@@ -27,6 +27,10 @@ final class AchievementService: ObservableObject {
     /// Unlocks written but not yet echoed back by the listener, so a second
     /// evaluation in the meantime doesn't write them again.
     private var pendingWrites: Set<AchievementID> = []
+    /// False until the couple's document has been read once. Judging before
+    /// that saw every badge as locked, re-wrote earned ones with a new date
+    /// and toasted them again on every launch (QA-026).
+    private var hasLoaded = false
 
     var unlockedCount: Int { unlockedAt.count }
 
@@ -38,9 +42,10 @@ final class AchievementService: ObservableObject {
         guard key != coupleKey else { return }
         listener?.remove()
         coupleKey = key
+        hasLoaded = false
         #if DEBUG
         // Demo runs have no signed-in user; badges are judged locally only.
-        if AuthService.isDemo { return }
+        if AuthService.isDemo { hasLoaded = true; return }
         #endif
         listener = fs.achievementsCollection.document(key).addSnapshotListener { [weak self] snapshot, error in
             Task { @MainActor [weak self] in
@@ -62,6 +67,7 @@ final class AchievementService: ObservableObject {
         }
         unlockedAt = unlocked
         pendingWrites.subtract(unlocked.keys)
+        hasLoaded = true
 
         let c = data["counters"] as? [String: Any] ?? [:]
         counters = AchievementCounters(
@@ -73,7 +79,7 @@ final class AchievementService: ObservableObject {
     /// Persist any achievements the snapshot now satisfies. Already-unlocked
     /// ones are never re-evaluated, so a badge can't be lost.
     func evaluate(_ snapshot: AchievementSnapshot) {
-        guard let coupleKey else { return }
+        guard let coupleKey, hasLoaded else { return }
         let newly = Achievement.all.filter {
             unlockedAt[$0.id] == nil && !pendingWrites.contains($0.id) && $0.isEarned(in: snapshot)
         }

@@ -17,6 +17,9 @@ struct SendToDoghouseSheet: View {
     @State private var isSending = false
     @State private var showError = false
     @State private var errorText = ""
+    @FocusState private var focusedField: Field?
+
+    private enum Field { case reason, suggestion }
 
     private let reasonChips = [
         "Forgot something important", "Left a mess", "Said something rude",
@@ -33,110 +36,125 @@ struct SendToDoghouseSheet: View {
     private var sendColor: Color { Color(red: 0.86, green: 0.33, blue: 0.33) }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            bg.ignoresSafeArea()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    // Close button row
-                    HStack {
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(headerColor)
-                                .padding(10)
-                                .background(Color(red: 0.89, green: 0.81, blue: 0.70))
-                                .clipShape(Circle())
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 16)
-
-                    // SECTION 1 — What did they do?
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("WHAT DID \(partnerName.uppercased()) DO?")
-                            .font(.caption.bold())
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                // Close button row
+                HStack {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(headerColor)
-                            .tracking(1.2)
-
-                        TextField("They forgot...", text: $reason, axis: .vertical)
-                            .lineLimit(2...4)
-                            .padding(12)
-                            .background(Color.white.opacity(0.85))
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                        ChipFlow(spacing: 8) {
-                            ForEach(reasonChips, id: \.self) { chip in
-                                PillChip(
-                                    label: chip,
-                                    isSelected: reason == chip,
-                                    style: .filled
-                                ) {
-                                    reason = (reason == chip) ? "" : chip
-                                }
-                            }
-                        }
+                            .padding(10)
+                            .background(Color(red: 0.89, green: 0.81, blue: 0.70))
+                            .clipShape(Circle())
                     }
-                    .padding(.horizontal, 20)
-
-                    // SECTION 2 — How can they make it up?
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("HOW CAN THEY MAKE IT UP? (OPTIONAL)")
-                            .font(.caption.bold())
+                    Spacer()
+                    // Puts the keyboard away. (A keyboard toolbar doesn't
+                    // show in a sheet without a navigation stack.)
+                    if focusedField != nil {
+                        Button("Done") { focusedField = nil }
+                            .font(.subheadline.bold())
                             .foregroundStyle(headerColor)
-                            .tracking(1.2)
-
-                        TextField("They could...", text: $suggestion, axis: .vertical)
-                            .lineLimit(2...4)
-                            .padding(12)
-                            .background(Color.white.opacity(0.85))
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                        ChipFlow(spacing: 8) {
-                            ForEach(suggestionChips, id: \.self) { chip in
-                                PillChip(
-                                    label: chip,
-                                    isSelected: suggestion == chip,
-                                    style: .outlined
-                                ) {
-                                    suggestion = (suggestion == chip) ? "" : chip
-                                }
-                            }
-                        }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color(red: 0.89, green: 0.81, blue: 0.70))
+                            .clipShape(Capsule())
                     }
-                    .padding(.horizontal, 20)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
 
-                    // SECTION 3 — Share with friends?
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle(isOn: $isPublic) {
-                            HStack(spacing: 8) {
-                                Text("📣")
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Share with friends")
-                                        .font(.subheadline.bold())
-                                        .foregroundStyle(headerColor)
-                                    Text(isPublic
-                                         ? "Friends can see this and react. Two dogs in at once starts a jailbreak vote!"
-                                         : "Just between you two.")
-                                        .font(.caption)
-                                        .foregroundStyle(headerColor.opacity(0.65))
-                                }
-                            }
-                        }
-                        .tint(Color(red: 0.68, green: 0.42, blue: 0.18))
-                        .padding(14)
+                // SECTION 1 — What did they do?
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("WHAT DID \(partnerName.uppercased()) DO?")
+                        .font(.caption.bold())
+                        .foregroundStyle(headerColor)
+                        .tracking(1.2)
+
+                    TextField("They forgot...", text: $reason, axis: .vertical)
+                        .lineLimit(2...4)
+                        .focused($focusedField, equals: .reason)
+                        .padding(12)
                         .background(Color.white.opacity(0.85))
                         .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                    ChipFlow(spacing: 8) {
+                        ForEach(reasonChips, id: \.self) { chip in
+                            PillChip(
+                                label: chip,
+                                isSelected: reason == chip,
+                                style: .filled
+                            ) {
+                                reason = (reason == chip) ? "" : chip
+                            }
+                        }
                     }
-                    .padding(.horizontal, 20)
-
-                    // Space so content isn't hidden under sticky button
-                    Color.clear.frame(height: 100)
                 }
-            }
+                .padding(.horizontal, 20)
 
-            // Sticky bottom send button
+                // SECTION 2 — How can they make it up?
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("HOW CAN THEY MAKE IT UP? (OPTIONAL)")
+                        .font(.caption.bold())
+                        .foregroundStyle(headerColor)
+                        .tracking(1.2)
+
+                    TextField("They could...", text: $suggestion, axis: .vertical)
+                        .lineLimit(2...4)
+                        .focused($focusedField, equals: .suggestion)
+                        .padding(12)
+                        .background(Color.white.opacity(0.85))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                    ChipFlow(spacing: 8) {
+                        ForEach(suggestionChips, id: \.self) { chip in
+                            PillChip(
+                                label: chip,
+                                isSelected: suggestion == chip,
+                                style: .outlined
+                            ) {
+                                suggestion = (suggestion == chip) ? "" : chip
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                // SECTION 3 — Share with friends?
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(isOn: $isPublic) {
+                        HStack(spacing: 8) {
+                            Text("📣")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Share with friends")
+                                    .font(.subheadline.bold())
+                                    .foregroundStyle(headerColor)
+                                Text(isPublic
+                                     ? "Friends can see this and react. Two dogs in at once starts a jailbreak vote!"
+                                     : "Just between you two.")
+                                    .font(.caption)
+                                    .foregroundStyle(headerColor.opacity(0.65))
+                            }
+                        }
+                    }
+                    .tint(Color(red: 0.68, green: 0.42, blue: 0.18))
+                    .padding(14)
+                    .background(Color.white.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(.horizontal, 20)
+            }
+            .padding(.bottom, 20)
+        }
+        // Drag the form to put the keyboard away (it used to have no
+        // way down at all).
+        .scrollDismissesKeyboard(.interactively)
+        .background(bg.ignoresSafeArea())
+        // The send button sits in the scroll view's bottom inset rather
+        // than floating over it: with the keyboard up it rides above the
+        // keys and the form scrolls clear of it, so a tap meant for a
+        // field can't land on Send and spend a grace charge.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 6) {
                 Button {
                     Task { await send() }
@@ -171,7 +189,8 @@ struct SendToDoghouseSheet: View {
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 28)
+            .padding(.top, 10)
+            .padding(.bottom, focusedField == nil ? 28 : 10)
             .background(
                 bg
                     .shadow(color: .black.opacity(0.07), radius: 10, y: -4)

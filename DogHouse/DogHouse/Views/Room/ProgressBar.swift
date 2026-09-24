@@ -36,7 +36,9 @@ struct RoomProgressBar: View {
 
                 Spacer()
 
-                if level.hasLuxury {
+                // Only the top level is the max; luxury starts two levels
+                // earlier (VIP Lounge) and showed MAX with levels still to go.
+                if level.next == nil {
                     Text("MAX")
                         .font(.caption.bold())
                         .foregroundStyle(.yellow)
