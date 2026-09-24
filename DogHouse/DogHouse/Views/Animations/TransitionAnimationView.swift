@@ -22,6 +22,9 @@ struct SendToDogHouseAnimation: View {
     /// The partner's dog, so the one that gets kicked is theirs.
     var avatarId: String = "dog_1"
     var cosmetics: AvatarCosmetics = .none
+    /// Replaces the headline (the kicked dog's own phone plays this too,
+    /// with its own dog, and speaks to them rather than about them).
+    var headlineOverride: String? = nil
     var onComplete: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -30,7 +33,8 @@ struct SendToDogHouseAnimation: View {
     private typealias T = KickTimeline
 
     private var headline: String {
-        partnerName.isEmpty
+        if let headlineOverride { return headlineOverride }
+        return partnerName.isEmpty
             ? "SENT TO THE\nDOGHOUSE!"
             : "\(partnerName.uppercased()) WAS SENT\nTO THE DOGHOUSE!"
     }

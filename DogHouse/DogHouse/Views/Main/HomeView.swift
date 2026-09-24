@@ -44,14 +44,12 @@ struct HomeView: View {
     @State private var showLevelUpToast = false
     /// nil until the first level reading of the session — see checkForLevelUp.
     @State private var lastSeenLevel: RoomLevel?
-    @State private var showSendAnimation = false
     /// Set when a send succeeds; the kick starts once the sheet is gone, so
     /// it doesn't play underneath the sheet as it slides away.
     @State private var sendAnimationPending = false
-    @State private var showReleaseAnimation = false
-    /// My own stay just ended while I was watching: my phone gets its own
-    /// "YOU'RE FREE!" (the sender's phone plays theirs on the tap).
-    @State private var myRelease: DoghouseEvent?
+    /// The stay my phone just played the kick for, so the "sent you" toast
+    /// doesn't repeat it.
+    @State private var kickedStayId: String?
     /// I was sent while looking at my partner's page — the page flips back
     /// to my dog and this says why.
     @State private var showSentToast = false
@@ -347,7 +345,22 @@ struct HomeView: View {
                 guard AuthService.isDemo,
                       ProcessInfo.processInfo.arguments.contains("-demoKick") else { return }
                 try? await Task.sleep(for: .seconds(2.5))
-                showSendAnimation = true
+                playSendKick()
+            }
+            // `-demoKicked`: the kicked dog's own phone, same kick, my dog.
+            // It goes to the Shop tab first and arrives the way a live send
+            // does, to show the kick lands on any tab and over any sheet.
+            .task {
+                guard AuthService.isDemo,
+                      ProcessInfo.processInfo.arguments.contains("-demoKicked") else { return }
+                try? await Task.sleep(for: .seconds(1))
+                notificationService.pendingDestination = .shop
+                try? await Task.sleep(for: .seconds(1.5))
+                doghouseService.justSentEvent = DoghouseEvent(
+                    id: "demo_kicked", senderId: "demo_partner", receiverId: "demo_me",
+                    reason: "Left the dishes again", suggestion: nil,
+                    startedAt: Date(), endedAt: nil, isActive: true
+                )
             }
             // `-demoRelease homecoming|peaceOffering`: the same for the
             // release animation, pinned to that scene.
@@ -355,7 +368,7 @@ struct HomeView: View {
                 guard AuthService.isDemo,
                       UserDefaults.standard.string(forKey: "demoRelease") != nil else { return }
                 try? await Task.sleep(for: .seconds(2.5))
-                showReleaseAnimation = true
+                playPartnerRelease()
             }
             #endif
             // Coming back from the background: the clock moved on without us,
@@ -426,7 +439,7 @@ struct HomeView: View {
                 notificationService.pendingAction = nil
                 switch action {
                 case .releasePartner:
-                    showReleaseAnimation = true
+                    playPartnerRelease()
                     Task {
                         try? await doghouseService.releasePartner(releasedBy: "redemption")
                         SoundService.shared.playRelease()
@@ -453,10 +466,15 @@ struct HomeView: View {
             evaluateAchievements()
             if old == nil, new != nil { showMyNewStay() }
         }
+        .onChange(of: doghouseService.justSentEvent?.id) { _, id in
+            guard id != nil, let sent = doghouseService.justSentEvent else { return }
+            doghouseService.justSentEvent = nil
+            playMyKick(sent)
+        }
         .onChange(of: doghouseService.justReleasedEvent?.id) { _, id in
             guard id != nil, let freed = doghouseService.justReleasedEvent else { return }
             doghouseService.justReleasedEvent = nil
-            myRelease = freed
+            playMyRelease(freed)
             SoundService.shared.playRelease()
         }
         .onChange(of: doghouseService.partnerDoghouseEvent?.id) { evaluateAchievements() }
@@ -476,46 +494,12 @@ struct HomeView: View {
         .sheet(isPresented: $showSendSheet, onDismiss: {
             guard sendAnimationPending else { return }
             sendAnimationPending = false
-            showSendAnimation = true
+            playSendKick()
         }) {
             SendToDoghouseSheet(doghouseService: doghouseService, partnerName: partnerName, onSent: {
                 sendAnimationPending = true
             })
             .presentationDetents([.large])
-        }
-        .overlay {
-            if showSendAnimation {
-                SendToDogHouseAnimation(
-                    partnerName: partnerName,
-                    avatarId: partnerAvatarId,
-                    cosmetics: partnerCosmetics
-                ) {
-                    showSendAnimation = false
-                }
-                .zIndex(100)
-            }
-            if showReleaseAnimation {
-                ReleaseFromDogHouseAnimation(
-                    partnerName: partnerName,
-                    avatarId: partnerAvatarId,
-                    cosmetics: partnerCosmetics
-                ) {
-                    showReleaseAnimation = false
-                }
-                .zIndex(100)
-            }
-            if let freed = myRelease {
-                ReleaseFromDogHouseAnimation(
-                    avatarId: myAvatarId,
-                    cosmetics: myCosmetics,
-                    sublineOverride: freed.releasedBy == "redemption"
-                        ? "You made it up: treats for you, and an hour of immunity"
-                        : "Welcome home! You're immune for an hour"
-                ) {
-                    myRelease = nil
-                }
-                .zIndex(100)
-            }
         }
     }
 
@@ -524,12 +508,79 @@ struct HomeView: View {
     /// own dog and say so. A cold launch starts on my page: no toast then.
     private func showMyNewStay() {
         guard scenePageIndex != 0, !tour.isActive else { return }
+        // The kick says it already; just bring my dog on screen.
+        if doghouseService.justSentEvent != nil
+            || kickedStayId == doghouseService.myDoghouseEvent?.id {
+            withAnimation(.easeInOut(duration: 0.35)) { scenePageIndex = 0 }
+            return
+        }
         HapticService.shared.warning()
         withAnimation(.easeInOut(duration: 0.35)) { scenePageIndex = 0 }
         withAnimation(.spring(duration: 0.4)) { showSentToast = true }
         Task {
             try? await Task.sleep(for: .seconds(4))
             withAnimation { showSentToast = false }
+        }
+    }
+
+    // MARK: - Kick and release animations
+    //
+    // These play in their own window above the app, not as an overlay on
+    // Home: an overlay runs unseen behind any sheet or on another tab, and
+    // then only one of the two phones sees the moment.
+
+    /// The sender's kick: my partner's dog goes flying.
+    private func playSendKick() {
+        AnimationWindow.shared.present { done in
+            SendToDogHouseAnimation(
+                partnerName: partnerName,
+                avatarId: partnerAvatarId,
+                cosmetics: partnerCosmetics,
+                onComplete: done
+            )
+        }
+    }
+
+    /// My partner just sent me while I was watching: my phone plays the
+    /// same boot kick theirs does, with my own dog.
+    private func playMyKick(_ event: DoghouseEvent) {
+        kickedStayId = event.id
+        withAnimation(.easeInOut(duration: 0.35)) { scenePageIndex = 0 }
+        SoundService.shared.playSendToDoghouse()
+        AnimationWindow.shared.present { done in
+            SendToDogHouseAnimation(
+                avatarId: myAvatarId,
+                cosmetics: myCosmetics,
+                headlineOverride: "YOU'RE IN\nTHE DOGHOUSE!",
+                onComplete: done
+            )
+        }
+    }
+
+    /// I let my partner out.
+    private func playPartnerRelease() {
+        AnimationWindow.shared.present { done in
+            ReleaseFromDogHouseAnimation(
+                partnerName: partnerName,
+                avatarId: partnerAvatarId,
+                cosmetics: partnerCosmetics,
+                onComplete: done
+            )
+        }
+    }
+
+    /// My own stay just ended while I was watching: my phone gets its own
+    /// "YOU'RE FREE!" (the sender's phone plays theirs on the tap).
+    private func playMyRelease(_ freed: DoghouseEvent) {
+        AnimationWindow.shared.present { done in
+            ReleaseFromDogHouseAnimation(
+                avatarId: myAvatarId,
+                cosmetics: myCosmetics,
+                sublineOverride: freed.releasedBy == "redemption"
+                    ? "You made it up: treats for you, and an hour of immunity"
+                    : "Welcome home! You're immune for an hour",
+                onComplete: done
+            )
         }
     }
 
@@ -878,7 +929,7 @@ struct HomeView: View {
     /// Let the partner out. Confirming a redemption claim also rewards treats,
     /// which is why the server needs to know which of the two this was.
     private func releasePartner(event: DoghouseEvent) {
-        showReleaseAnimation = true
+        playPartnerRelease()
         let byRedemption = event.redemptionRequested == true
         Task {
             do {

@@ -40,6 +40,8 @@ struct SendToDoghouseSheet: View {
             VStack(alignment: .leading, spacing: 28) {
                 // Close button row
                 HStack {
+                    // Closing mid-send would lose the kick: the sheet's
+                    // onDismiss runs before onSent can ask for it.
                     Button { dismiss() } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 14, weight: .bold))
@@ -48,6 +50,7 @@ struct SendToDoghouseSheet: View {
                             .background(Color(red: 0.89, green: 0.81, blue: 0.70))
                             .clipShape(Circle())
                     }
+                    .disabled(isSending)
                     Spacer()
                     // Puts the keyboard away. (A keyboard toolbar doesn't
                     // show in a sheet without a navigation stack.)
@@ -149,6 +152,7 @@ struct SendToDoghouseSheet: View {
         // Drag the form to put the keyboard away (it used to have no
         // way down at all).
         .scrollDismissesKeyboard(.interactively)
+        .interactiveDismissDisabled(isSending)
         .background(bg.ignoresSafeArea())
         // The send button sits in the scroll view's bottom inset rather
         // than floating over it: with the keyboard up it rides above the

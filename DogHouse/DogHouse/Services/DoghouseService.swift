@@ -48,6 +48,17 @@ class DoghouseService: ObservableObject {
     /// its own "YOU'RE FREE!" for it once, then clears this.
     @Published var justReleasedEvent: DoghouseEvent?
 
+    /// A stay my partner just put me in, seen live on this phone. Home plays
+    /// the same boot kick the sender sees, with my own dog, once, then
+    /// clears this.
+    @Published var justSentEvent: DoghouseEvent?
+    /// Stays older than this when they reach me (a reconnect, a cached
+    /// snapshot) are old news, not a kick to watch.
+    private static let sentKickWindow: TimeInterval = 120
+    /// The last stay announced, kept across launches so a listener error
+    /// followed by a reconnect never replays the kick.
+    private static let lastSentKickKey = "lastSentKickEventId"
+
     /// True once history and both active-stay listeners have reported from
     /// the server. Until then "no active stay" and "never released" only mean
     /// "not loaded yet", and badges judged on them were false (QA-026).
@@ -156,9 +167,15 @@ class DoghouseService: ObservableObject {
                 guard let self else { return }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    // Only a stay that lands after the first report is one
+                    // the user watched arrive; the first report on launch
+                    // plays under the splash.
+                    let wasLoaded = self.myEventLoaded
                     if snapshot != nil { self.myEventLoaded = true }
                     if let doc = snapshot?.documents.first {
-                        self.myDoghouseEvent = try? self.fs.decode(DoghouseEvent.self, from: doc)
+                        let event = try? self.fs.decode(DoghouseEvent.self, from: doc)
+                        self.myDoghouseEvent = event
+                        if wasLoaded, let event { self.announceSend(of: event) }
                     } else {
                         // Immunity on release is now granted server-side by the
                         // releasePartner callable / vote resolver.
@@ -321,6 +338,15 @@ class DoghouseService: ObservableObject {
             "has_suggestion": suggestion?.isEmpty == false
         ])
         // Snapshot listeners will update both devices
+    }
+
+    /// Publishes `justSentEvent` for a fresh stay not announced before.
+    private func announceSend(of event: DoghouseEvent) {
+        let defaults = UserDefaults.standard
+        guard Date().timeIntervalSince(event.startedAt) < Self.sentKickWindow,
+              defaults.string(forKey: Self.lastSentKickKey) != event.id else { return }
+        defaults.set(event.id, forKey: Self.lastSentKickKey)
+        justSentEvent = event
     }
 
     /// Publishes `justReleasedEvent` if the stay I was just watching really
