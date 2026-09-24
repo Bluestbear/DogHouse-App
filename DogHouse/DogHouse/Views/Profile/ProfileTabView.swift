@@ -51,6 +51,9 @@ struct ProfileTabView: View {
 
                 // Account actions
                 accountSection
+
+                // Feedback to the developer
+                inputSection
             }
             .navigationTitle("Profile")
             .dhPageBackground()
@@ -462,6 +465,23 @@ struct ProfileTabView: View {
             } message: {
                 Text("This permanently erases your profile, history, friendships, and feed posts, and unpairs your partner. It cannot be undone. Type DELETE to confirm.")
             }
+        }
+    }
+
+    // MARK: - Input
+
+    private var inputSection: some View {
+        Section {
+            NavigationLink {
+                InputView()
+                    .environmentObject(authService)
+            } label: {
+                Label("Send Feedback", systemImage: "envelope.fill")
+            }
+        } header: {
+            Text("Input")
+        } footer: {
+            Text("Got a complaint or an idea? It goes straight to the developer.")
         }
     }
 

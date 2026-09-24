@@ -312,7 +312,7 @@ struct TreatPackSheet: View {
 
     private var footnote: some View {
         VStack(spacing: 6) {
-            Text("Treats are added by our server once Apple confirms the purchase — usually within a few seconds.")
+            Text("Treats are added by our server once the store confirms the purchase — usually within a few seconds.")
             #if DEBUG
             if purchases.isDemo {
                 Text("Preview mode — no real purchase is made.")

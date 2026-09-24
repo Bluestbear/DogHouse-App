@@ -1,8 +1,9 @@
 //
-//  InputTabView.swift
+//  InputView.swift
 //  DogHouse
 //
-//  Feedback tab: users send complaints or feature suggestions. Each
+//  Feedback form, pushed from the Input section at the bottom of Profile.
+//  Users send complaints or feature suggestions. Each
 //  submission is written to the `feedback` collection; the
 //  onFeedbackCreated Cloud Function emails it to the developer.
 //
@@ -11,7 +12,7 @@ import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 
-struct InputTabView: View {
+struct InputView: View {
     @EnvironmentObject var authService: AuthService
 
     @State private var kind: FeedbackKind = .suggestion
@@ -32,59 +33,57 @@ struct InputTabView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
+        Form {
+            Section {
+                Picker("Type", selection: $kind) {
+                    ForEach(FeedbackKind.allCases) { k in
+                        Text("\(k.emoji) \(k.rawValue)").tag(k)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("What's on your mind?")
+            } footer: {
+                Text(kind == .suggestion
+                     ? "Got an idea for a feature? I'd love to hear it!"
+                     : "Something not working or bugging you? Tell me and I'll fix it.")
+            }
+
+            Section("Your message") {
+                TextEditor(text: $message)
+                    .frame(minHeight: 140)
+            }
+
+            if let errorText {
                 Section {
-                    Picker("Type", selection: $kind) {
-                        ForEach(FeedbackKind.allCases) { k in
-                            Text("\(k.emoji) \(k.rawValue)").tag(k)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("What's on your mind?")
-                } footer: {
-                    Text(kind == .suggestion
-                         ? "Got an idea for a feature? I'd love to hear it!"
-                         : "Something not working or bugging you? Tell me and I'll fix it.")
-                }
-
-                Section("Your message") {
-                    TextEditor(text: $message)
-                        .frame(minHeight: 140)
-                }
-
-                if let errorText {
-                    Section {
-                        Text(errorText).font(.dhCaption).foregroundStyle(.red)
-                    }
-                }
-
-                Section {
-                    Button {
-                        submit()
-                    } label: {
-                        Group {
-                            if isSending {
-                                ProgressView()
-                            } else {
-                                Text("Send to Harrison 📬")
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .disabled(trimmedMessage.isEmpty || isSending)
-                } footer: {
-                    Text("Your message and display name are sent straight to the developer.")
+                    Text(errorText).font(.dhCaption).foregroundStyle(.red)
                 }
             }
-            .navigationTitle("Input")
-            .dhPageBackground()
-            .alert("Thanks! 🐾", isPresented: $showSent) {
-                Button("You're welcome") {}
-            } message: {
-                Text("Your \(kind.rawValue.lowercased()) is on its way. Every message gets read!")
+
+            Section {
+                Button {
+                    submit()
+                } label: {
+                    Group {
+                        if isSending {
+                            ProgressView()
+                        } else {
+                            Text("Send to Harrison 📬")
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .disabled(trimmedMessage.isEmpty || isSending)
+            } footer: {
+                Text("Your message and display name are sent straight to the developer.")
             }
+        }
+        .navigationTitle("Input")
+        .dhPageBackground()
+        .alert("Thanks! 🐾", isPresented: $showSent) {
+            Button("You're welcome") {}
+        } message: {
+            Text("Your \(kind.rawValue.lowercased()) is on its way. Every message gets read!")
         }
     }
 
@@ -116,6 +115,6 @@ struct InputTabView: View {
 }
 
 #Preview {
-    InputTabView()
+    NavigationStack { InputView() }
         .environmentObject(AuthService())
 }

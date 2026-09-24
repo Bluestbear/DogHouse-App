@@ -99,3 +99,23 @@ DogHouse/brag-output/
 Marketing/App Images/
 Marketing/Neuer Ordner.zip
 QA-Run-*/
+
+# Shipaton 2026 submission working files (demo plan, Devpost draft, captures)
+Shipaton/
+
+# Firebase client config: every developer downloads their own
+# (see README "Configuration"). Ignoring does not untrack a file that is
+# already tracked.
+GoogleService-Info*.plist
+# Functions secrets and legacy runtime config for the emulator
+**/.secret.local
+**/.runtimeconfig.json
+# Service-account keys
+*service-account*.json
+serviceAccount*.json
+# Emulator exports can hold user data
+emulator-data/
+firebase-export-*/
+
+# Marketing reference photos of real people: not licensed for publication
+Marketing/

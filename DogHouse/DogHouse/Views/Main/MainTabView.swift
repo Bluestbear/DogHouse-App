@@ -49,7 +49,7 @@ struct MainTabView: View {
     @State private var tourStartedThisSession = false
 
     enum AppTab: Hashable {
-        case home, friends, shop, profile, input
+        case home, friends, shop, profile
     }
 
     private static var initialTab: AppTab {
@@ -79,11 +79,6 @@ struct MainTabView: View {
 
             Tab("Profile", systemImage: "person.crop.circle.fill", value: AppTab.profile) {
                 ProfileTabView(challengeService: challengeService)
-                    .environmentObject(authService)
-            }
-
-            Tab("Input", systemImage: "envelope.fill", value: AppTab.input) {
-                InputTabView()
                     .environmentObject(authService)
             }
         }

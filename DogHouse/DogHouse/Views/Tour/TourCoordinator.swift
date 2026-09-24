@@ -68,8 +68,7 @@ enum TourStep: Int, CaseIterable, Sendable {
             return .home
         case .shop: return .shop
         case .friends: return .friends
-        case .anniversary: return .profile
-        case .input: return .input
+        case .anniversary, .input: return .profile
         }
     }
 
@@ -181,7 +180,7 @@ enum TourStep: Int, CaseIterable, Sendable {
             return TourStepContent(
                 emoji: "📬",
                 title: "Your input matters",
-                body: "Got a complaint or an idea? This tab sends your message straight to the developer. Every message gets read."
+                body: "Got a complaint or an idea? Tap Send Feedback in the Input section at the bottom of Profile and it goes straight to the developer. Every message gets read."
             )
         case .widgets:
             return TourStepContent(

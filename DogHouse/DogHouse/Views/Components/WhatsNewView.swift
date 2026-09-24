@@ -40,8 +40,8 @@ struct WhatsNewView: View {
              detail: "Surprise photo races pop up during the day — first to send a pic wins a Whatever-I-Want card. You can now use the camera directly, and the winning photo is shown to both of you."),
         Item(emoji: "💍", title: "Anniversary Race",
              detail: "Set your anniversary date in Profile. On the day, the first of you to wish a happy anniversary in the app wins a Whatever-I-Want card."),
-        Item(emoji: "📬", title: "Input Tab",
-             detail: "Got a complaint or a feature idea? The new Input tab sends it straight to the developer. Every message gets read!"),
+        Item(emoji: "📬", title: "Send Feedback",
+             detail: "Got a complaint or a feature idea? Send Feedback, at the bottom of Profile, sends it straight to the developer. Every message gets read!"),
     ]
 
     var body: some View {

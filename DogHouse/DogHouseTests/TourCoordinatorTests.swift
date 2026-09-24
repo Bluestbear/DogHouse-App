@@ -84,7 +84,7 @@ struct TourCoordinatorTests {
         #expect(TourStep.friends.anchor == .addCouple)
         #expect(TourStep.anniversary.tab == .profile)
         #expect(TourStep.anniversary.anchor == .anniversary)
-        #expect(TourStep.input.tab == .input)
+        #expect(TourStep.input.tab == .profile)
         #expect(TourStep.sendButton.tab == .home)
         #expect(TourStep.sendButton.anchor == .sendButton)
     }

@@ -1,0 +1,46 @@
+DogHouse
+Copyright (c) 2026 Harrison Krampe
+
+The MIT License in LICENSE covers the source code in this repository
+(Swift, TypeScript, JavaScript, Python, shell scripts, Firestore rules and
+configuration files), EXCEPT the files listed in section 3 below.
+
+It does NOT cover the following. All rights are reserved.
+
+1. The DogHouse name, logo and brand. You may not use them to name, brand,
+   or market an app, product or service, or in a way that suggests it is
+   DogHouse or is endorsed by its author.
+
+2. Image assets. These files are excluded from the MIT License:
+     DogHouse/DogHouse/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+     DogHouse/DogHouse/Assets.xcassets/LaunchHead.imageset/LaunchHead.png
+     DogHouse/DogHouse/Assets.xcassets/LaunchFur.imageset/LaunchFur.png
+     DogHouse/DogHouse/Assets.xcassets/LaunchWordmark.imageset/LaunchWordmark@3x.png
+     DogHouse/DogHouse/Assets.xcassets/OldHikingBoot.imageset/OldHikingBoot.png
+     DogHouse/Design/icon-preview.png
+   Also excluded: any screenshots, demo video, App Store or marketing images
+   published with or linked from this repository.
+
+3. Character designs and the code that draws them. The DogHouse dog avatars,
+   their rooms, the doghouse, the cosmetics and the app icon are drawn in
+   code. The following files are NOT licensed under MIT, and all rights are
+   reserved:
+     DogHouse/DogHouse/Views/Avatar/AvatarView.swift
+     DogHouse/DogHouse/Views/Room/DoghouseScene.swift
+     DogHouse/DogHouse/Views/Room/LivingRoomScene.swift
+     DogHouse/DogHouse/Views/Animations/LaunchSplashView.swift
+     DogHouse/Design/make-app-icon.py
+     DogHouse/Design/make-app-icon-dog.py
+     DogHouse/Design/render-launch-head.swift
+     DogHouse/Design/render-launch-wordmark.swift
+   You may view, build and run them as part of this repository for
+   evaluation and study. You may not copy, modify or redistribute them, or
+   reproduce the DogHouse characters in another app or product.
+
+4. Legal texts. The privacy policy and terms in DogHouse/public/privacy.html
+   and DogHouse/public/terms.html are written for the author's app and
+   service. Do not reuse them as your own.
+
+Third-party dependencies (Firebase, GoogleSignIn, RevenueCat and npm
+packages) are fetched by Swift Package Manager and npm under their own
+licenses. None of them are vendored in this repository.
