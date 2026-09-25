@@ -59,6 +59,7 @@ struct CosmeticItem: Identifiable {
         .init(id: "hat_party",  name: "Party Hat",  category: .hat, price: 80,  primaryColor: Color(red: 0.95, green: 0.28, blue: 0.28), accentColor: Color(red: 0.20, green: 0.52, blue: 0.95), emoji: "🥳"),
         .init(id: "hat_cowboy", name: "Cowboy Hat", category: .hat, price: 100, primaryColor: Color(red: 0.52, green: 0.32, blue: 0.12), accentColor: Color(red: 0.30, green: 0.18, blue: 0.06), emoji: "🤠"),
         .init(id: "hat_chef",   name: "Chef's Hat", category: .hat, price: 100, primaryColor: .white,                                    accentColor: Color(red: 0.62, green: 0.62, blue: 0.62), emoji: "👨‍🍳"),
+        .init(id: "hat_top",    name: "Top Hat",    category: .hat, price: 160, primaryColor: Color(red: 0.14, green: 0.13, blue: 0.16), accentColor: Color(red: 0.82, green: 0.20, blue: 0.24), emoji: "🎩"),
         .init(id: "hat_wizard", name: "Wizard Hat", category: .hat, price: 180, primaryColor: Color(red: 0.36, green: 0.22, blue: 0.60), accentColor: Color(red: 0.95, green: 0.82, blue: 0.25), emoji: "🧙"),
         .init(id: "hat_halo",   name: "Halo",       category: .hat, price: 220, primaryColor: Color(red: 0.98, green: 0.88, blue: 0.35), accentColor: Color(red: 0.90, green: 0.72, blue: 0.20), emoji: "😇"),
         .init(id: "hat_crown",  name: "Crown",      category: .hat, price: 250, primaryColor: Color(red: 0.98, green: 0.80, blue: 0.10), accentColor: Color(red: 0.85, green: 0.18, blue: 0.18), emoji: "👑"),
@@ -68,6 +69,7 @@ struct CosmeticItem: Identifiable {
         .init(id: "glasses_heart", name: "Heart Frames", category: .glasses, price: 100, primaryColor: Color(red: 0.92, green: 0.20, blue: 0.40), accentColor: Color(red: 0.70, green: 0.08, blue: 0.25), emoji: "🩷"),
         .init(id: "glasses_ski",   name: "Ski Goggles",  category: .glasses, price: 110, primaryColor: Color(red: 0.20, green: 0.55, blue: 0.85), accentColor: Color(red: 0.95, green: 0.55, blue: 0.20), emoji: "🥽"),
         .init(id: "glasses_star",  name: "Star Frames",  category: .glasses, price: 120, primaryColor: Color(red: 0.95, green: 0.78, blue: 0.10), accentColor: Color(red: 0.75, green: 0.55, blue: 0.05), emoji: "⭐"),
+        .init(id: "glasses_pixel", name: "Pixel Shades", category: .glasses, price: 150, primaryColor: Color(red: 0.08, green: 0.08, blue: 0.09), accentColor: .white,                                    emoji: "🕶️"),
     ]
 
     static func item(for id: String) -> CosmeticItem? {

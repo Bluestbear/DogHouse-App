@@ -58,8 +58,9 @@ export const COSMETIC_NAMES: Record<string, string> = {
   necklace_diamond: "Diamond",
   hat_beanie: "Cozy Beanie", hat_party: "Party Hat", hat_cowboy: "Cowboy Hat",
   hat_chef: "Chef's Hat", hat_wizard: "Wizard Hat", hat_halo: "Halo", hat_crown: "Crown",
+  hat_top: "Top Hat",
   glasses_cool: "Cool Shades", glasses_round: "Round Specs", glasses_heart: "Heart Frames",
-  glasses_ski: "Ski Goggles", glasses_star: "Star Frames",
+  glasses_ski: "Ski Goggles", glasses_star: "Star Frames", glasses_pixel: "Pixel Shades",
 };
 
 /** What the scheduler has already done for this user. Stored under private/data.nudges. */

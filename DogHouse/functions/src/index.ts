@@ -28,9 +28,9 @@ const ROSES_COST = 5;
 // Offering says the pack costs in money — how many treats it is worth is
 // decided here, so a tampered client cannot inflate a purchase.
 //
-// Sized against the catalog (cosmetics run 50–300, whole catalog is 2570) and
+// Sized against the catalog (cosmetics run 50–300, whole catalog is 2880) and
 // against idle earning (1–5 treats/hr by room level, so ~70–120/day at the top
-// levels). Small ≈ a mid-tier cosmetic, large ≈ 60% of the catalog — a paying
+// levels). Small ≈ a mid-tier cosmetic, large ≈ 55% of the catalog — a paying
 // user still cannot buy the game out in one tap.
 const TREAT_PRODUCTS: Record<string, number> = {
   "com.Harrison.DogHouse.treats.small": 250,
@@ -63,9 +63,9 @@ const COSMETIC_PRICES: Record<string, number> = {
   necklace_pink: 75, necklace_gold: 120, necklace_rainbow: 200,
   necklace_bone: 60, necklace_heart: 90, necklace_diamond: 300,
   hat_party: 80, hat_crown: 250, hat_cowboy: 100, hat_chef: 100,
-  hat_wizard: 180, hat_beanie: 70, hat_halo: 220,
+  hat_wizard: 180, hat_beanie: 70, hat_halo: 220, hat_top: 160,
   glasses_cool: 80, glasses_heart: 100, glasses_star: 120,
-  glasses_round: 90, glasses_ski: 110,
+  glasses_round: 90, glasses_ski: 110, glasses_pixel: 150,
 };
 
 // Room progression — mirrors RoomLevel in Swift (RoomProgression.swift).

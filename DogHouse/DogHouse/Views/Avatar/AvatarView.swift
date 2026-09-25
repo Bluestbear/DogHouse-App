@@ -393,6 +393,7 @@ struct AvatarView: View {
         case "hat_beanie": beanieHat(item)
         case "hat_wizard": wizardHat(item)
         case "hat_halo":   haloHat(item)
+        case "hat_top":    topHat(item)
         default: EmptyView()
         }
     }
@@ -540,6 +541,27 @@ struct AvatarView: View {
         .offset(y: -(28 + 12.5) * scale) // seated by its 30-wide dome
     }
 
+    private func topHat(_ item: CosmeticItem) -> some View {
+        ZStack(alignment: .bottom) {
+            // Crown
+            Rectangle()
+                .fill(item.primaryColor)
+                .frame(width: 26 * scale, height: 22 * scale)
+                .offset(y: -3 * scale)
+            // Hat band
+            Rectangle()
+                .fill(item.accentColor)
+                .frame(width: 26 * scale, height: 5 * scale)
+                .offset(y: -3 * scale)
+            // Brim
+            Capsule()
+                .fill(item.primaryColor)
+                .frame(width: 40 * scale, height: 6 * scale)
+        }
+        .frame(width: 40 * scale, height: 25 * scale)
+        .offset(y: -(29 + 12.5) * scale) // seated by its 26-wide crown
+    }
+
     private func chefHat(_ item: CosmeticItem) -> some View {
         ZStack(alignment: .bottom) {
             // Puffy dome
@@ -561,10 +583,20 @@ struct AvatarView: View {
     }
 
     // MARK: - Glasses Cosmetics
-    // Eye centers: x = ±16*scale, y = -15*scale from ZStack center.
+    // Eye centers: x = ±16*scale, y = -15*scale from ZStack center; each eye
+    // is 14 wide. Lenses with a picture on them (heart, star, pixel) are
+    // solid so the eye doesn't show through behind the picture.
 
     @ViewBuilder
     private func glassesView(_ item: CosmeticItem) -> some View {
+        if item.id == "glasses_pixel" {
+            pixelShades(item)
+        } else {
+            framedGlasses(item)
+        }
+    }
+
+    private func framedGlasses(_ item: CosmeticItem) -> some View {
         ZStack {
             // Left lens
             lensShape(item: item)
@@ -590,22 +622,23 @@ struct AvatarView: View {
         case "glasses_heart":
             ZStack {
                 Circle()
-                    .fill(item.primaryColor.opacity(0.65))
+                    .fill(item.primaryColor)
                     .frame(width: 16 * scale, height: 16 * scale)
                 Image(systemName: "heart.fill")
-                    .font(.system(size: 7 * scale))
-                    .foregroundStyle(Color.white.opacity(0.55))
+                    .font(.system(size: 8 * scale))
+                    .foregroundStyle(Color.white.opacity(0.85))
             }
         case "glasses_star":
             ZStack {
+                // Night-sky lens so the gold star reads against it
                 Circle()
-                    .fill(item.primaryColor.opacity(0.20))
+                    .fill(Color(red: 0.16, green: 0.15, blue: 0.32))
                     .frame(width: 16 * scale, height: 16 * scale)
                 Circle()
                     .stroke(item.primaryColor, lineWidth: 2 * scale)
                     .frame(width: 16 * scale, height: 16 * scale)
                 Image(systemName: "star.fill")
-                    .font(.system(size: 7 * scale))
+                    .font(.system(size: 8 * scale))
                     .foregroundStyle(item.primaryColor)
             }
         case "glasses_round":
@@ -626,6 +659,34 @@ struct AvatarView: View {
                 .stroke(item.primaryColor, lineWidth: 2 * scale)
                 .frame(width: 16 * scale, height: 16 * scale)
         }
+    }
+
+    /// 8-bit "deal with it" shades: one bar across the top, and each lens
+    /// steps in along its bottom row. Drawn on a 4-unit pixel grid in the
+    /// avatar's 80-unit space (origin at centre), covering both eyes.
+    private func pixelShades(_ item: CosmeticItem) -> some View {
+        func px(_ x0: CGFloat, _ y0: CGFloat, _ x1: CGFloat, _ y1: CGFloat) -> CGRect {
+            CGRect(x: (x0 + 40) * scale, y: (y0 + 40) * scale,
+                   width: (x1 - x0) * scale, height: (y1 - y0) * scale)
+        }
+        let frame = Path { p in
+            p.addRect(px(-26, -23, 26, -19))            // top bar + bridge
+            for cx: CGFloat in [-16, 16] {
+                p.addRect(px(cx - 10, -19, cx + 10, -11))   // lens body
+                p.addRect(px(cx - 6, -11, cx + 6, -7))      // stepped bottom row
+            }
+        }
+        let shine = Path { p in
+            for cx: CGFloat in [-16, 16] {
+                p.addRect(px(cx - 8, -19, cx - 6, -17))
+                p.addRect(px(cx - 6, -17, cx - 4, -15))
+            }
+        }
+        return ZStack {
+            frame.fill(item.primaryColor)
+            shine.fill(item.accentColor)
+        }
+        .frame(width: size, height: size)
     }
 }
 
@@ -656,6 +717,8 @@ struct AvatarView: View {
                    cosmetics: .init(necklaceId: "necklace_pink", hatId: "hat_party", glassesId: "glasses_heart"))
         AvatarView(avatar: .allAvatars[4], mood: .happy, size: 90,
                    cosmetics: .init(necklaceId: "necklace_blue", hatId: "hat_cowboy", glassesId: "glasses_cool"))
+        AvatarView(avatar: .allAvatars[6], mood: .happy, size: 90,
+                   cosmetics: .init(necklaceId: "necklace_gold", hatId: "hat_top", glassesId: "glasses_pixel"))
     }
     .padding(24)
     .background(Color(red: 0.98, green: 0.96, blue: 0.92))
