@@ -33,6 +33,10 @@ struct TasksDrawer: View {
         return renegotiation.requestedBy != challengeService.userId
     }
 
+    /// The profile id, not challengeService.userId: that one stays
+    /// "mock_user" in demo mode, which would file every task under "you".
+    private var myId: String? { authService.userProfile?.id }
+
     private var coupleKey: String? {
         guard let userId = authService.userProfile?.id,
               let partnerId = authService.userProfile?.partnerId,
@@ -148,10 +152,10 @@ struct TasksDrawer: View {
                         // for it, so each partner's wishes are the other's
                         // ways out. App suggestions work for either.
                         taskGroup("For you to do", tasks: coupleTasks.filter {
-                            !$0.isAppSuggestion && $0.suggestedBy != challengeService.userId
+                            !$0.isAppSuggestion && $0.suggestedBy != myId
                         })
                         taskGroup("For \(partnerName) to do", tasks: coupleTasks.filter {
-                            !$0.isAppSuggestion && $0.suggestedBy == challengeService.userId
+                            !$0.isAppSuggestion && $0.suggestedBy == myId
                         })
                         taskGroup("Either of you", tasks: coupleTasks.filter(\.isAppSuggestion))
                     }
@@ -328,8 +332,8 @@ struct TasksDrawer: View {
         if AuthService.isDemo {
             coupleTasks = [
                 CoupleTask(id: "d1", title: "Do the dishes for a week", suggestedBy: "app", isAppSuggestion: true),
-                CoupleTask(id: "d2", title: "Plan a surprise date", suggestedBy: "me", isAppSuggestion: false),
-                CoupleTask(id: "d3", title: "Breakfast in bed", suggestedBy: "you", isAppSuggestion: false),
+                CoupleTask(id: "d2", title: "Plan a surprise date", suggestedBy: "demo_me", isAppSuggestion: false),
+                CoupleTask(id: "d3", title: "Breakfast in bed", suggestedBy: "demo_partner", isAppSuggestion: false),
             ]
             isLoading = false
             return
