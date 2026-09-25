@@ -107,20 +107,9 @@ struct TourOverlayView: View {
         return clamped.isNull ? cutout : clamped
     }
 
-    /// Registered frame first; toolbar buttons fall back to a UIKit lookup
-    /// because `.tourAnchor` cannot attach to a toolbar item (see
-    /// ToolbarButtonLocator). Trailing items read left to right: tasks,
-    /// games, achievements.
+    /// Every tour target registers its own frame with `.tourAnchor`.
     private func windowFrame(for anchor: TourAnchorID) -> CGRect? {
-        if let registered = anchors.frames[anchor] { return registered }
-        // Home's trailing toolbar has exactly three items: tasks, games,
-        // achievements. The tour only points at the first two.
-        let frames = ToolbarButtonLocator.trailingButtonFrames(count: 3)
-        switch anchor {
-        case .tasksButton: return frames.first
-        case .gamesMenu: return frames.count > 1 ? frames[1] : frames.first
-        default: return nil
-        }
+        anchors.frames[anchor]
     }
 
     // MARK: - Layers

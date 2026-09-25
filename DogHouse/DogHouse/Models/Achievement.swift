@@ -104,9 +104,9 @@ struct Achievement: Identifiable, Sendable {
                     description: "A living room reaches level 10.", target: 10, unit: "level"),
         // Play
         Achievement(id: .quizNight, category: .play, emoji: "🧠", title: "Quiz Night",
-                    description: "Finished your first couple quiz.", target: 1, unit: nil),
+                    description: "Finished your first couple game.", target: 1, unit: nil),
         Achievement(id: .mindReaders, category: .play, emoji: "🔮", title: "Mind Readers",
-                    description: "Matched answers on five quizzes.", target: 5, unit: "matches"),
+                    description: "Five right guesses or matched answers.", target: 5, unit: "matches"),
         Achievement(id: .sayCheese, category: .play, emoji: "📸", title: "Say Cheese",
                     description: "Won a Photo Dash.", target: 1, unit: nil),
         Achievement(id: .wishGranted, category: .play, emoji: "🎟️", title: "Wish Granted",
@@ -150,9 +150,9 @@ struct Achievement: Identifiable, Sendable {
         case .homeSweetHome, .dogPalace:
             raw = max(s.myLevel.rawValue, s.partnerLevel.rawValue)
         case .quizNight:
-            raw = s.challenges.filter { $0.type == "quiz" && $0.status == "completed" }.count
+            raw = s.challenges.filter { ($0.type == "quiz" || $0.isGame) && $0.status == "completed" }.count
         case .mindReaders:
-            raw = s.challenges.filter { $0.type == "quiz" && $0.status == "completed" && Self.answersMatch($0) }.count
+            raw = s.challenges.filter { $0.status == "completed" && Self.answersMatch($0) }.count
         case .sayCheese:
             raw = s.challenges.filter { $0.type == "photo" && $0.status == "completed" && $0.winnerId != nil }.count
         case .wishGranted:
@@ -175,9 +175,11 @@ struct Achievement: Identifiable, Sendable {
         progress(in: s) >= target
     }
 
-    /// A quiz "matches" when both partners picked the same option.
+    /// A quiz "matches" when both partners picked the same option; a game
+    /// when the guess was right (or, in likelyTo, both named the same person).
     private static func answersMatch(_ challenge: Challenge) -> Bool {
-        guard let answers = challenge.answers, answers.count == 2 else { return false }
+        if challenge.isGame { return challenge.correct == true }
+        guard challenge.type == "quiz", let answers = challenge.answers, answers.count == 2 else { return false }
         let own = answers.values.compactMap { $0["own"] }
         return own.count == 2 && own[0] == own[1]
     }

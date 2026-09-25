@@ -25,7 +25,8 @@ final class NotificationService: ObservableObject {
     @Published var pendingAction: PushAction?
 
     enum Destination: Equatable {
-        case home      // doghouse status, redemption, games
+        case home      // doghouse status, redemption, photo dash
+        case play      // games waiting on you, game results
         case friends   // feed, votes, friend requests
         case shop      // "you can now afford…" nudges
     }
@@ -126,6 +127,8 @@ final class NotificationService: ObservableObject {
             pendingDestination = .friends
         case "shop":
             pendingDestination = .shop
+        case "game":
+            pendingDestination = .play
         default:
             // doghouse, redemption, belly_rub, challenge, treats, streak, level → Home
             pendingDestination = .home

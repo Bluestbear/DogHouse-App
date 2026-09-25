@@ -1066,16 +1066,6 @@ export const onDeletionRequest = onDocumentCreated(
         .get();
       await Promise.all(coupleLinks.docs.map((d) => d.ref.delete()));
 
-      async function deleteArrayContains(
-        collection: string,
-        field: string,
-        value: string
-      ): Promise<void> {
-        const snap = await db.collection(collection)
-          .where(field, "array-contains", value).get();
-        await Promise.all(snap.docs.map((d) => d.ref.delete()));
-      }
-
       // Delete owned/related documents
       await deleteWhere("partnerCodes", "userId", uid);
       await deleteWhere("feedPosts", "senderId", uid);
@@ -1088,7 +1078,14 @@ export const onDeletionRequest = onDocumentCreated(
       await deleteWhere("reports", "reporterId", uid);
       await db.collection("blocks").doc(uid).delete();
       await db.collection("emailQuota").doc(uid).delete();
-      await deleteArrayContains("challenges", "participants", uid);
+      // Challenges, with the hidden answer a Play-tab game keeps in its
+      // private subcollection (deleting a parent does not delete it).
+      const challenges = await db.collection("challenges")
+        .where("participants", "array-contains", uid).get();
+      await Promise.all(challenges.docs.map(async (d) => {
+        await d.ref.collection("private").doc("answer").delete();
+        await d.ref.delete();
+      }));
       // Votes: a deleted account merely leaves the audience. Deleting every
       // vote it could see wiped other couples' running jailbreak votes. A
       // vote it was a candidate in is meaningless without it and goes.
@@ -1109,6 +1106,8 @@ export const onDeletionRequest = onDocumentCreated(
           db.collection("coupleTasks").doc(key).delete(),
           db.collection("coupleMeta").doc(key).delete(),
           db.collection("onboardingTasks").doc(key).delete(),
+          db.collection("gameStats").doc(key).delete(),
+          db.collection("taskRenegotiation").doc(key).delete(),
         ]);
       }
 
@@ -1169,6 +1168,9 @@ export const onChallengeWritten = onDocumentWritten(
   async (event) => {
     const after = event.data?.after.data();
     if (!after) return;
+    // Play-tab games are settled (and any card paid) inside answerGame; this
+    // trigger must never touch them, least of all the card-award path below.
+    if (after.type === "game") return;
     const ref = event.data!.after.ref;
     const participants: string[] = after.participants ?? [];
 
@@ -1257,6 +1259,377 @@ export const onChallengeWritten = onDocumentWritten(
     }
   }
 );
+
+// ─────────────────────────────────────────────────────────────
+// 9b. Play tab — couple games (createGame / answerGame) and the
+//     "redo our tasks" request (taskRenegotiation)
+// ─────────────────────────────────────────────────────────────
+
+// A game is written ONLY by these callables (admin SDK); the challenge rules
+// admit no client create or update of type "game". The author's answer lives
+// in challenges/{id}/private/answer, which no client can read, so the partner
+// cannot peek before guessing. onChallengeWritten ignores games entirely:
+// their result and any card are settled here, in one transaction.
+
+type GameKind = "preference" | "ballKnowledge" | "twoTruths" | "likelyTo";
+
+const GAME_KINDS: Record<GameKind, { title: string; min: number; max: number }> = {
+  preference: { title: "Preference Quiz", min: 2, max: 2 },
+  ballKnowledge: { title: "Ball Knowledge", min: 2, max: 4 },
+  twoTruths: { title: "Two Truths & a Lie", min: 3, max: 3 },
+  likelyTo: { title: "Who's More Likely To", min: 2, max: 2 },
+};
+const GAME_PROMPT_MAX = 200;
+const GAME_OPTION_MAX = 120;
+const MAX_ACTIVE_GAMES = 20;
+// Wins fill a card meter; a full meter pays a Whatever-I-Want card, at most
+// GAME_CARDS_PER_WEEK per player per ISO week. A full meter over the cap
+// stays full and pays out on the first win of an uncapped week.
+const GAME_CARD_WINS = 5;
+const GAME_CARDS_PER_WEEK = 2;
+
+/**
+ * Length in user-perceived-ish characters. The Swift client counts
+ * Characters; UTF-16 `.length` would count an emoji as two and reject text
+ * the client allowed. Code points are never more than UTF-16 units, so the
+ * server is at least as lenient as the client.
+ */
+function charCount(s: string): number {
+  return Array.from(s).length;
+}
+
+/** ISO-8601 week of `now` in UTC, as "YYYY-Www" (the week-year, not the calendar year). */
+function isoWeekKey(now: Date): string {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7)); // Thursday of this week
+  const year = d.getUTCFullYear();
+  const week = Math.ceil(((d.getTime() - Date.UTC(year, 0, 1)) / 864e5 + 1) / 7);
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+// Start a game for the partner to answer. Validation rejects rather than
+// trims over-long text: silently cutting a Two Truths statement would change
+// the game the author thinks they sent.
+export const createGame = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  return once(uid, req.data?.idempotencyKey, async () => {
+    const kind = req.data?.kind as GameKind;
+    const spec = typeof kind === "string" ? GAME_KINDS[kind] : undefined;
+    if (!spec || !Object.prototype.hasOwnProperty.call(GAME_KINDS, kind)) {
+      throw new HttpsError("invalid-argument", "That game doesn't exist.");
+    }
+
+    const prompt = (typeof req.data?.prompt === "string" ? req.data.prompt : "").trim();
+    if (!prompt) throw new HttpsError("invalid-argument", "Your game needs a question.");
+    if (charCount(prompt) > GAME_PROMPT_MAX) {
+      throw new HttpsError("invalid-argument",
+        `Keep the question under ${GAME_PROMPT_MAX} characters.`);
+    }
+
+    let options: string[];
+    if (kind === "likelyTo") {
+      // "me" = the author, "you" = the partner; the client renders names.
+      options = ["me", "you"];
+    } else {
+      const raw = req.data?.options;
+      if (!Array.isArray(raw) || raw.some((o) => typeof o !== "string")) {
+        throw new HttpsError("invalid-argument", "Those answers don't look right.");
+      }
+      options = (raw as string[]).map((o) => o.trim());
+      if (options.length < spec.min || options.length > spec.max) {
+        throw new HttpsError("invalid-argument", spec.min === spec.max
+          ? `${spec.title} needs exactly ${spec.min} answers.`
+          : `${spec.title} needs ${spec.min} to ${spec.max} answers.`);
+      }
+      if (options.some((o) => !o)) {
+        throw new HttpsError("invalid-argument", "Fill in every answer.");
+      }
+      if (options.some((o) => charCount(o) > GAME_OPTION_MAX)) {
+        throw new HttpsError("invalid-argument",
+          `Keep each answer under ${GAME_OPTION_MAX} characters.`);
+      }
+    }
+
+    const answerIndex = req.data?.answerIndex;
+    if (!Number.isInteger(answerIndex) || answerIndex < 0 || answerIndex >= options.length) {
+      throw new HttpsError("invalid-argument", "Pick your answer first.");
+    }
+
+    const meRef = db.collection("users").doc(uid);
+    const gameRef = db.collection("challenges").doc();
+    // Equality-only: served by single-field indexes, no composite needed.
+    const activeQuery = db.collection("challenges")
+      .where("createdBy", "==", uid)
+      .where("type", "==", "game")
+      .where("status", "==", "active");
+
+    const { partnerId, myName } = await db.runTransaction(async (tx) => {
+      const me = (await tx.get(meRef)).data() ?? {};
+      const claimed = me.partnerId as string | undefined;
+      const partner = claimed && claimed !== "skipped" ?
+        (await tx.get(db.collection("users").doc(claimed))).data() : undefined;
+      const partnerId = requireMutualPartner(uid, claimed, partner);
+
+      const active = await tx.get(activeQuery);
+      if (active.size >= MAX_ACTIVE_GAMES) {
+        throw new HttpsError("resource-exhausted",
+          "You have lots of games waiting already. Let your partner catch up first!");
+      }
+
+      tx.set(gameRef, {
+        coupleKey: coupleKeyOf(uid, partnerId), type: "game", kind,
+        title: spec.title, prompt, options, createdBy: uid,
+        participants: [uid, partnerId], status: "active", createdAt: Timestamp.now(),
+      });
+      tx.set(gameRef.collection("private").doc("answer"), { answerIndex });
+      return { partnerId, myName: (me.displayName as string | undefined) ?? "Your partner" };
+    });
+
+    await notifyUser(partnerId, `🎲 ${myName} sent you a ${spec.title}`, prompt,
+      { data: { type: "game" } });
+    return { ok: true, challengeId: gameRef.id };
+  });
+});
+
+// The partner answers. Scoring, stats and any card are one transaction, so
+// a game resolves exactly once however many times the call is retried.
+export const answerGame = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  return once(uid, req.data?.idempotencyKey, async () => {
+    const challengeId = req.data?.challengeId;
+    if (typeof challengeId !== "string" || !challengeId || challengeId.includes("/")) {
+      throw new HttpsError("invalid-argument", "Missing game.");
+    }
+    const guessIndex = req.data?.guessIndex;
+    if (!Number.isInteger(guessIndex)) {
+      throw new HttpsError("invalid-argument", "Pick an answer first.");
+    }
+
+    const gameRef = db.collection("challenges").doc(challengeId);
+    const answerRef = gameRef.collection("private").doc("answer");
+
+    const outcome = await db.runTransaction(async (tx) => {
+      // ── reads ──
+      const [gameSnap, answerSnap, meSnap] = await Promise.all([
+        tx.get(gameRef), tx.get(answerRef), tx.get(db.collection("users").doc(uid)),
+      ]);
+      const game = gameSnap.data();
+      if (!game || game.type !== "game") {
+        throw new HttpsError("not-found", "That game is gone.");
+      }
+      if (game.status !== "active") {
+        throw new HttpsError("failed-precondition", "This game has already been played.");
+      }
+      const participants = (game.participants ?? []) as string[];
+      const authorId = game.createdBy as string;
+      if (!participants.includes(uid)) {
+        throw new HttpsError("permission-denied", "This isn't your game.");
+      }
+      if (uid === authorId) {
+        throw new HttpsError("failed-precondition", "You can't answer your own game!");
+      }
+      const options = (game.options ?? []) as string[];
+      if (guessIndex < 0 || guessIndex >= options.length) {
+        throw new HttpsError("invalid-argument", "Pick one of the answers.");
+      }
+      const answerIndex = answerSnap.data()?.answerIndex;
+      if (!Number.isInteger(answerIndex)) {
+        throw new HttpsError("internal", "This game is broken. Ask for a new one!");
+      }
+
+      // Both halves must still point at each other, and at THIS game's author.
+      const me = meSnap.data() ?? {};
+      if (me.partnerId !== authorId) {
+        throw new HttpsError("failed-precondition", "You have no partner.");
+      }
+      const key = coupleKeyOf(uid, authorId);
+      const statsRef = db.collection("gameStats").doc(key);
+      const [authorSnap, statsSnap] = await Promise.all([
+        tx.get(db.collection("users").doc(authorId)), tx.get(statsRef),
+      ]);
+      requireMutualPartner(uid, me.partnerId as string, authorSnap.data());
+      if (game.coupleKey !== key) {
+        throw new HttpsError("failed-precondition", "This isn't your game.");
+      }
+
+      // ── scoring ──
+      const isLikely = game.kind === "likelyTo";
+      // likelyTo: guesser 0 = themselves, author 0 = the author. Naming the
+      // same person means different indices.
+      const correct = isLikely ? guessIndex !== answerIndex : guessIndex === answerIndex;
+      const winnerId: string | null = isLikely ? null : (correct ? uid : authorId);
+
+      const stats = statsSnap.data() ?? {};
+      // increment(0) still creates a missing counter as 0, so every counter
+      // exists after the first game of any kind.
+      const statsUpdate: Record<string, unknown> = {
+        played: FieldValue.increment(1),
+        likelyToPlayed: FieldValue.increment(isLikely ? 1 : 0),
+        inSync: FieldValue.increment(isLikely && correct ? 1 : 0),
+        updatedAt: Timestamp.now(),
+      };
+
+      let cardEarned = false;
+      if (winnerId) {
+        statsUpdate.wins = { [winnerId]: FieldValue.increment(1) };
+        const progress = Math.min(
+          ((stats.cardProgress?.[winnerId] as number | undefined) ?? 0) + 1, GAME_CARD_WINS);
+        const week = isoWeekKey(new Date());
+        const earnedThisWeek = stats.cardsWeek?.[winnerId] === week ?
+          ((stats.cardsThisWeek?.[winnerId] as number | undefined) ?? 0) : 0;
+        if (progress >= GAME_CARD_WINS && earnedThisWeek < GAME_CARDS_PER_WEEK) {
+          cardEarned = true;
+          statsUpdate.cardProgress = { [winnerId]: 0 };
+          statsUpdate.cardsWeek = { [winnerId]: week };
+          statsUpdate.cardsThisWeek = { [winnerId]: earnedThisWeek + 1 };
+        } else {
+          statsUpdate.cardProgress = { [winnerId]: progress };
+        }
+      }
+
+      // ── writes ──
+      tx.update(gameRef, {
+        status: "completed", answerIndex, guessIndex, correct, winnerId,
+        completedAt: Timestamp.now(),
+      });
+      // Nested maps (not dotted keys) so merge deep-merges per uid, and the
+      // first game can create the document.
+      tx.set(statsRef, statsUpdate, { merge: true });
+      if (cardEarned && winnerId) {
+        tx.update(db.collection("users").doc(winnerId), { wishCards: FieldValue.increment(1) });
+      }
+      return {
+        correct, answerIndex: answerIndex as number, winnerId, cardEarned,
+        authorId, isLikely, prompt: (game.prompt as string | undefined) ?? "",
+        guesserName: (me.displayName as string | undefined) ?? "Your partner",
+      };
+    });
+
+    const { correct, answerIndex, winnerId, cardEarned, authorId, isLikely, guesserName } = outcome;
+    let title: string;
+    let body: string;
+    if (isLikely) {
+      title = correct ? "💞 You're in sync!" : "🤔 Agree to disagree?";
+      body = correct
+        ? `${guesserName} picked the same person: "${outcome.prompt}"`
+        : `${guesserName} sees it differently: "${outcome.prompt}"`;
+    } else if (correct) {
+      title = `🎯 ${guesserName} got it!`;
+      body = `They knew the answer to "${outcome.prompt}"`;
+    } else {
+      title = `😈 You stumped ${guesserName}!`;
+      body = cardEarned
+        ? "That win filled your meter: you earned a Whatever-I-Want card 🎟️"
+        : `They got "${outcome.prompt}" wrong.`;
+    }
+    await notifyUser(authorId, title, body, { data: { type: "game" } });
+
+    return { ok: true, correct, answerIndex, winnerId, cardEarned };
+  });
+});
+
+// Ask to redo the couple's task list. One request per couple, kept at
+// taskRenegotiation/{coupleKey} (server-written only):
+//   request  → { status: "pending" }        (no request may already exist)
+//   accept   → { status: "accepted" } and onboardingTasks is cleared so both
+//              partners renegotiate; coupleTasks stays in force until the
+//              new list is confirmed. The accepted doc tells both apps to
+//              show "negotiate new tasks".
+//   complete → the renegotiated list is final; the request doc goes.
+//   decline / cancel → the request doc goes.
+export const taskRenegotiation = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  return once(uid, req.data?.idempotencyKey, async () => {
+    const action = req.data?.action;
+    if (!["request", "cancel", "accept", "decline", "complete"].includes(action)) {
+      throw new HttpsError("invalid-argument", "Unknown request.");
+    }
+
+    const meRef = db.collection("users").doc(uid);
+    const result = await db.runTransaction(async (tx) => {
+      // ── reads ──
+      const me = (await tx.get(meRef)).data() ?? {};
+      const claimed = me.partnerId as string | undefined;
+      const partner = claimed && claimed !== "skipped" ?
+        (await tx.get(db.collection("users").doc(claimed))).data() : undefined;
+      const partnerId = requireMutualPartner(uid, claimed, partner);
+      const key = coupleKeyOf(uid, partnerId);
+      const reqRef = db.collection("taskRenegotiation").doc(key);
+      const onboardingRef = db.collection("onboardingTasks").doc(key);
+      const [reqSnap, onboardingSnap] = await Promise.all([
+        tx.get(reqRef), tx.get(onboardingRef),
+      ]);
+      const current = reqSnap.data();
+      const status = current?.status as string | undefined;
+      const mine = current?.requestedBy === uid;
+
+      // ── checks + writes ──
+      switch (action) {
+      case "request":
+        if (current) {
+          throw new HttpsError("failed-precondition", status === "accepted"
+            ? "You're already redoing your tasks. Finish that first!"
+            : mine
+              ? "You've already asked. Waiting on your partner!"
+              : "Your partner already asked to redo tasks. Answer them first!");
+        }
+        tx.set(reqRef, { requestedBy: uid, requestedAt: Timestamp.now(), status: "pending" });
+        break;
+      case "accept":
+      case "decline":
+        if (status !== "pending") {
+          throw new HttpsError("failed-precondition", "There's no request to answer.");
+        }
+        if (mine) {
+          throw new HttpsError("permission-denied", "Your partner has to answer this one.");
+        }
+        if (action === "accept") {
+          tx.delete(onboardingRef);
+          tx.update(reqRef, { status: "accepted", acceptedAt: Timestamp.now() });
+        } else {
+          tx.delete(reqRef);
+        }
+        break;
+      case "cancel":
+        if (status === "pending") {
+          if (!mine) {
+            throw new HttpsError("permission-denied", "Only the person who asked can cancel.");
+          }
+        } else if (status !== "accepted") {
+          throw new HttpsError("failed-precondition", "There's nothing to cancel.");
+        }
+        tx.delete(reqRef);
+        break;
+      case "complete": {
+        const finalTasks = onboardingSnap.data()?.finalTasks;
+        if (status !== "accepted" || !Array.isArray(finalTasks) || finalTasks.length === 0) {
+          throw new HttpsError("failed-precondition",
+            "Finish agreeing on your new tasks first.");
+        }
+        tx.delete(reqRef);
+        break;
+      }
+      }
+      return {
+        partnerId,
+        myName: (me.displayName as string | undefined) ?? "Your partner",
+      };
+    });
+
+    const { partnerId, myName } = result;
+    const push: Record<string, [string, string] | undefined> = {
+      request: [`📝 ${myName} wants to redo your tasks`,
+        "Open DogHouse to accept or decline."],
+      accept: [`✅ ${myName} said yes!`, "Time to rework your task list together."],
+      decline: [`🙅 ${myName} wants to keep your tasks`, "Your task list stays as it is."],
+    };
+    const message = push[action as string];
+    if (message) {
+      await notifyUser(partnerId, message[0], message[1], { data: { type: "tasks" } });
+    }
+    return { ok: true };
+  });
+});
 
 // ─────────────────────────────────────────────────────────────
 // 10. Wish redeemed — deliver the "Whatever I Want" demand

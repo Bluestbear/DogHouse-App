@@ -746,6 +746,98 @@ describe("challenges", () => {
   });
 });
 
+// ───────────────────────── Play tab ─────────────────────────
+
+describe("Play games", () => {
+  // The exact shape createGame writes (admin SDK).
+  const game = {
+    coupleKey: COUPLE_KEY, type: "game", kind: "preference", title: "Preference Quiz",
+    prompt: "Beach or mountains?", options: ["Beach", "Mountains"], createdBy: ALICE,
+    participants: [ALICE, BOB], status: "active", createdAt: new Date(),
+  };
+
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, "challenges", "game1"), game);
+      await setDoc(doc(db, "challenges", "game1", "private", "answer"), { answerIndex: 1 });
+    });
+  });
+
+  test("both partners can read a game; an outsider cannot", async () => {
+    await assertSucceeds(getDoc(doc(as(BOB), "challenges", "game1")));
+    await assertSucceeds(getDoc(doc(as(ALICE), "challenges", "game1")));
+    await assertFails(getDoc(doc(as(MALLORY), "challenges", "game1")));
+  });
+
+  test("NOBODY can read or write a game's hidden answer", async () => {
+    // Reading it would let the partner peek before guessing.
+    for (const uid of [BOB, ALICE, MALLORY]) {
+      await assertFails(getDoc(doc(as(uid), "challenges", "game1", "private", "answer")));
+      await assertFails(setDoc(doc(as(uid), "challenges", "game1", "private", "answer"),
+        { answerIndex: 0 }));
+    }
+    await assertFails(getDocs(collection(as(BOB), "challenges", "game1", "private")));
+    await assertFails(deleteDoc(doc(as(ALICE), "challenges", "game1", "private", "answer")));
+  });
+
+  test("a client cannot create a game (createGame only)", async () => {
+    await assertFails(setDoc(doc(as(ALICE), "challenges", "game2"), game));
+    await assertFails(setDoc(doc(as(ALICE), "challenges", "game3"),
+      { ...game, answers: { [ALICE]: { own: "Beach" } } }));
+  });
+
+  test("a client cannot answer, complete or win a game (answerGame only)", async () => {
+    const ref = doc(as(BOB), "challenges", "game1");
+    await assertFails(updateDoc(ref, {
+      status: "completed", guessIndex: 1, answerIndex: 1, correct: true,
+      winnerId: BOB, completedAt: new Date(),
+    }));
+    // Shapes that would pass the quiz-answer or photo-claim rules if they
+    // were not gated on type.
+    await assertFails(updateDoc(ref, { [`answers.${BOB}`]: { own: "Beach" } }));
+    await assertFails(updateDoc(ref, {
+      status: "completed", winnerId: BOB, photoData: "aGVsbG8=", completedAt: new Date(),
+    }));
+    await assertFails(updateDoc(doc(as(ALICE), "challenges", "game1"), { prompt: "edited" }));
+    await assertFails(deleteDoc(doc(as(ALICE), "challenges", "game1")));
+  });
+});
+
+describe("gameStats / taskRenegotiation", () => {
+  for (const coll of ["gameStats", "taskRenegotiation"]) {
+    test(`${coll}: the couple can read it even before it exists`, async () => {
+      // The listener attaches before the first game / request.
+      await assertSucceeds(getDoc(doc(as(ALICE), coll, COUPLE_KEY)));
+      await assertSucceeds(getDoc(doc(as(BOB), coll, COUPLE_KEY)));
+    });
+
+    test(`${coll}: the couple can read it once it exists; outsiders never`, async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), coll, COUPLE_KEY), coll === "gameStats"
+          ? { played: 3, wins: { [ALICE]: 2 }, cardProgress: { [ALICE]: 2 } }
+          : { requestedBy: ALICE, requestedAt: new Date(), status: "pending" });
+      });
+      await assertSucceeds(getDoc(doc(as(BOB), coll, COUPLE_KEY)));
+      await assertFails(getDoc(doc(as(MALLORY), coll, COUPLE_KEY)));
+      await assertFails(getDoc(doc(anon(), coll, COUPLE_KEY)));
+      await assertFails(getDocs(collection(as(ALICE), coll)));
+    });
+
+    test(`${coll}: nobody can write it, not even the couple`, async () => {
+      const forged = [MALLORY, ALICE].sort().join("_");
+      await assertFails(setDoc(doc(as(ALICE), coll, COUPLE_KEY), { played: 1 }));
+      await assertFails(setDoc(doc(as(MALLORY), coll, forged), { played: 1 }));
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), coll, COUPLE_KEY), { status: "pending", requestedBy: BOB });
+      });
+      await assertFails(updateDoc(doc(as(ALICE), coll, COUPLE_KEY),
+        { cardProgress: { [ALICE]: 5 }, status: "accepted" }));
+      await assertFails(deleteDoc(doc(as(BOB), coll, COUPLE_KEY)));
+    });
+  }
+});
+
 // ───────────────────────── server-only collections ─────────────────────────
 
 describe("wishes", () => {

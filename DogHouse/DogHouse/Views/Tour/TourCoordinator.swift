@@ -32,8 +32,8 @@ enum TourAnchorID: String, CaseIterable, Sendable {
     case rosesButton      // 🌹 on the partner's scene page
     case roomProgress     // the room level bar under my scene
     case sendButton       // "Send X to the DogHouse"
-    case tasksButton      // toolbar: Your Tasks
-    case gamesMenu        // toolbar: + menu
+    case tasksButton      // Home: the Tasks tab on the right edge
+    case playTiles        // Play: the row of game tiles
     case treatBalance     // Shop: the 🦴 balance capsule
     case addCouple        // Friends: the add-couple button by the title
     case anniversary      // Profile: anniversary section
@@ -64,8 +64,9 @@ enum TourStep: Int, CaseIterable, Sendable {
     /// The tab this step lives on. The coordinator's observer switches to it.
     var tab: MainTabView.AppTab {
         switch self {
-        case .welcome, .myRoom, .partnerRoom, .roses, .treats, .sendButton, .tasks, .games, .widgets:
+        case .welcome, .myRoom, .partnerRoom, .roses, .treats, .sendButton, .tasks, .widgets:
             return .home
+        case .games: return .play
         case .shop: return .shop
         case .friends: return .friends
         case .anniversary, .input: return .profile
@@ -80,7 +81,7 @@ enum TourStep: Int, CaseIterable, Sendable {
         case .treats: return .roomProgress
         case .sendButton: return .sendButton
         case .tasks: return .tasksButton
-        case .games: return .gamesMenu
+        case .games: return .playTiles
         case .shop: return .treatBalance
         case .friends: return .addCouple
         case .anniversary: return .anniversary
@@ -150,13 +151,13 @@ enum TourStep: Int, CaseIterable, Sendable {
             return TourStepContent(
                 emoji: "📋",
                 title: "Your tasks",
-                body: "The tasks you both agreed on live here. A dog in the DogHouse can do one to earn their way out — or claim they've made it up and wait for you to confirm."
+                body: "The tasks you both agreed on slide in from here. A dog in the DogHouse can do one to earn their way out. Want new ones? Ask to renegotiate."
             )
         case .games:
             return TourStepContent(
-                emoji: "🧠",
-                title: "Quizzes & cards",
-                body: "Start couple quizzes here and see if your answers match. Win a Whatever-I-Want card and your partner can't refuse it. Watch out for surprise Photo Dashes!"
+                emoji: "🎲",
+                title: "Play together",
+                body: "Pick a game and send it over. Games waiting on you show up right below, and the scorecard keeps count. Every 5 wins earns a Whatever-I-Want card your partner can't refuse."
             )
         case .shop:
             return TourStepContent(
@@ -389,72 +390,6 @@ private struct WindowFrameProbeView: UIViewRepresentable {
         func report() {
             guard window != nil else { return }
             onFrame?(convert(bounds, to: nil))
-        }
-    }
-}
-
-// MARK: - Toolbar Lookup
-
-/// Toolbar items are the one place `.tourAnchor` cannot work: SwiftUI never
-/// materialises a toolbar item's `.background`, so the probe view is never
-/// created, let alone added to a window. The navigation bar's buttons are
-/// real UIKit views, though, so the overlay looks those up directly when a
-/// toolbar step has nothing registered.
-@MainActor
-enum ToolbarButtonLocator {
-    /// Window-space frames for the trailing toolbar buttons, left to right.
-    ///
-    /// On iOS 26 the trailing items share one glass platter, and depending on
-    /// the OS build the individual buttons may or may not exist as their own
-    /// views. Innermost button-sized views win when they do; when only the
-    /// platter is found it is split evenly into `count` slots so each step
-    /// still points at the right half.
-    static func trailingButtonFrames(count: Int) -> [CGRect] {
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow) else { return [] }
-
-        var bars: [UINavigationBar] = []
-        collect(into: &bars, from: window)
-
-        var candidates: [CGRect] = []
-        for bar in bars where bar.window != nil && !bar.isHidden && bar.alpha > 0 {
-            var views: [UIView] = []
-            collect(into: &views, from: bar)
-            for view in views where !view.isHidden && view.alpha > 0 {
-                let frame = view.convert(view.bounds, to: nil)
-                guard frame.width >= 24, frame.width <= 160,
-                      frame.height >= 24, frame.height <= 72,
-                      frame.minX > window.bounds.midX else { continue }
-                candidates.append(frame)
-            }
-        }
-
-        // Drop containers: anything that fully contains another candidate.
-        let leaves = candidates.filter { outer in
-            !candidates.contains { inner in inner != outer && outer.contains(inner) }
-        }
-        var frames: [CGRect] = []
-        for frame in leaves.sorted(by: { $0.minX < $1.minX })
-        where !frames.contains(where: { $0.intersects(frame) }) {
-            frames.append(frame)
-        }
-
-        // One group view standing in for several buttons: divide it up.
-        if frames.count == 1, count > 1, let group = frames.first {
-            let slot = group.width / CGFloat(count)
-            return (0..<count).map { i in
-                CGRect(x: group.minX + slot * CGFloat(i), y: group.minY, width: slot, height: group.height)
-            }
-        }
-        return frames
-    }
-
-    private static func collect<T: UIView>(into out: inout [T], from view: UIView) {
-        for sub in view.subviews {
-            if let match = sub as? T { out.append(match) }
-            collect(into: &out, from: sub)
         }
     }
 }

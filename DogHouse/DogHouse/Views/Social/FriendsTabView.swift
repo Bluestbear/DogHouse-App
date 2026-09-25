@@ -20,9 +20,17 @@ struct FriendsTabView: View {
     @State private var coupleToBlock: FriendCouple?
     @ObservedObject private var moderation = ModerationService.shared
 
-    /// The feed minus anything from someone I've blocked.
-    private var visiblePosts: [FeedPost] {
+    /// The week's sendings minus anything from someone I've blocked. The
+    /// leaderboard ranks time served, so it needs the finished ones too.
+    private var weekPosts: [FeedPost] {
         feedService.posts.filter { !moderation.isHidden($0) }
+    }
+
+    /// Feed cards: only dogs still in the DogHouse. A release flips the
+    /// post's status server-side (releasePartner, or a won jailbreak vote),
+    /// and the listener drops the card live.
+    private var visiblePosts: [FeedPost] {
+        weekPosts.filter(\.isActive)
     }
 
     var body: some View {
@@ -44,9 +52,9 @@ struct FriendsTabView: View {
                 }
 
                 // Top Dog — most time served among friends this week
-                if visiblePosts.count > 1 {
+                if weekPosts.count > 1 {
                     Section {
-                        TopDogLeaderboard(posts: visiblePosts)
+                        TopDogLeaderboard(posts: weekPosts)
                     } header: {
                         Text("Top Dog 🏆 (this week)")
                     }

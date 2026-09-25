@@ -11,17 +11,20 @@ import SwiftUI
 
 // MARK: - Time At Home
 
-/// The live counter shown while I'm not in the doghouse.
+/// The live counter shown while a dog is not in the doghouse: mine on my
+/// page, my partner's on theirs.
 struct TimeAtHomeCard: View {
-    /// When my current stay at home began.
+    /// When the current stay at home began.
     let start: Date
     /// Coarse elapsed time, for the VoiceOver reading — a screen reader
     /// announcing a seconds counter would never stop talking.
     let elapsed: TimeInterval
+    /// Whose stay it is, as the sentence's subject: "You've" or "Sam's".
+    var who = "You've"
 
     var body: some View {
         VStack(spacing: 4) {
-            Text("You've been home for:")
+            Text("\(who) been home for:")
                 .font(.dhCaption)
                 .foregroundStyle(.secondary)
             ElapsedTimeText(start: start)
@@ -29,7 +32,7 @@ struct TimeAtHomeCard: View {
                 .foregroundStyle(Color.freedomGreen)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("You've been home for \(elapsed.formattedDuration)")
+        .accessibilityLabel("\(who) been home for \(elapsed.formattedDuration)")
         .padding()
         .frame(maxWidth: .infinity)
         .background(Color(.systemGray6))

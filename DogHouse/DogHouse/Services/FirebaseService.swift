@@ -42,6 +42,8 @@ final class FirebaseService {
     var coupleMetaCollection: CollectionReference { db.collection("coupleMeta") }
     var wishesCollection: CollectionReference { db.collection("wishes") }
     var achievementsCollection: CollectionReference { db.collection("achievements") }
+    var gameStatsCollection: CollectionReference { db.collection("gameStats") }
+    var taskRenegotiationCollection: CollectionReference { db.collection("taskRenegotiation") }
 
     // MARK: - Helpers
 

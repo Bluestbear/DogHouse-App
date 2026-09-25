@@ -71,6 +71,33 @@ struct AchievementTests {
         #expect(Achievement.named(.mindReaders).progress(in: s) == 2)
     }
 
+    private func game(_ kind: GameKind, correct: Bool, status: String = "completed") -> Challenge {
+        Challenge(id: UUID().uuidString, coupleKey: "a_b", type: "game", title: kind.title, prompt: "...burn toast?",
+                  createdBy: "b", participants: ["a", "b"], status: status, createdAt: now,
+                  options: ["me", "you"], kind: kind.rawValue, correct: correct)
+    }
+
+    @Test("Play games count toward the quiz badges; right guesses and in-sync answers are matches")
+    func gameMatches() {
+        let s = snapshot(challenges: [
+            game(.preference, correct: true),
+            game(.likelyTo, correct: true),
+            game(.twoTruths, correct: false),
+            game(.ballKnowledge, correct: true, status: "active"),
+            quiz(a: "1", b: "1"),
+        ])
+        #expect(Achievement.named(.quizNight).isEarned(in: s))
+        #expect(Achievement.named(.mindReaders).progress(in: s) == 3)
+    }
+
+    @Test("likelyTo reads from the viewer's side")
+    func likelyToLabels() {
+        let g = game(.likelyTo, correct: false, status: "active")
+        #expect(g.displayPrompt == "Who's more likely to burn toast?")
+        #expect(g.optionLabels(viewerIsAuthor: false, authorName: "Bea", guesserName: "Al") == ["Me", "Bea"])
+        #expect(g.optionLabels(viewerIsAuthor: true, authorName: "Bea", guesserName: "Al") == ["Me", "Al"])
+    }
+
     @Test("Peace badges count whole days both at home, capped at the target")
     func peace() {
         let s = snapshot(bothHomeFor: 45 * 86_400)

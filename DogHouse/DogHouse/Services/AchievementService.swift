@@ -20,6 +20,9 @@ final class AchievementService: ObservableObject {
     @Published private(set) var counters = AchievementCounters()
     /// The most recent unlock, for Home's toast. Home clears it.
     @Published var justUnlocked: Achievement?
+    /// The standing Home last judged, so Play can show progress without
+    /// rebuilding it from services it does not hold.
+    @Published private(set) var lastSnapshot: AchievementSnapshot?
 
     private let fs = FirebaseService.shared
     private var listener: ListenerRegistration?
@@ -33,6 +36,15 @@ final class AchievementService: ObservableObject {
     private var hasLoaded = false
 
     var unlockedCount: Int { unlockedAt.count }
+
+    /// The locked badge closest to done, for Play's trophy card.
+    var nextUp: (achievement: Achievement, progress: Int)? {
+        guard let snapshot = lastSnapshot else { return nil }
+        return Achievement.all
+            .filter { unlockedAt[$0.id] == nil }
+            .map { ($0, $0.progress(in: snapshot)) }
+            .max { Double($0.1) / Double($0.0.target) < Double($1.1) / Double($1.0.target) }
+    }
 
     /// Attach to the couple's document. Safe to call repeatedly; it only
     /// re-subscribes when the couple changes.
@@ -79,6 +91,7 @@ final class AchievementService: ObservableObject {
     /// Persist any achievements the snapshot now satisfies. Already-unlocked
     /// ones are never re-evaluated, so a badge can't be lost.
     func evaluate(_ snapshot: AchievementSnapshot) {
+        lastSnapshot = snapshot
         guard let coupleKey, hasLoaded else { return }
         let newly = Achievement.all.filter {
             unlockedAt[$0.id] == nil && !pendingWrites.contains($0.id) && $0.isEarned(in: snapshot)

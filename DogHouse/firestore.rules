@@ -323,7 +323,27 @@ service cloud.firestore {
       allow read, create, update: if authed() && isMyCoupleKey(coupleKey);
     }
 
-    // Couple challenges (quiz / photo dash / anniversary race).
+    // Play-tab game stats (wins, card meter, weekly card count) and the
+    // "redo our tasks" request. SERVER-ONLY: answerGame and
+    // taskRenegotiation write them with admin privileges, and the card meter
+    // pays Whatever-I-Want cards, so no client write of any kind. Path-based
+    // like coupleMeta/achievements: the listeners attach before the first
+    // game is played or the first request made.
+    match /gameStats/{coupleKey} {
+      allow read: if authed() && isMyCoupleKey(coupleKey);
+      allow write: if false;
+    }
+
+    match /taskRenegotiation/{coupleKey} {
+      allow read: if authed() && isMyCoupleKey(coupleKey);
+      allow write: if false;
+    }
+
+    // Couple challenges (quiz / photo dash / anniversary race / Play game).
+    // Play games (type "game") are created and answered ONLY by the
+    // createGame / answerGame callables: the create rule admits quiz and
+    // anniversary only, and the update rule quiz answers and photo claims
+    // only, so neither matches a game.
     // Participants only; a completed challenge is immutable from clients
     // (which is what makes the anniversary race first-tap-wins), and
     // cardAwarded can only ever be set server-side.
@@ -357,6 +377,12 @@ service cloud.firestore {
         && request.auth.uid in resource.data.participants
         && resource.data.status == 'active'
         && (quizAnswer() || photoClaim());
+    }
+
+    // A Play game's hidden answer. The partner must not read it before
+    // guessing; only the callables (admin SDK) touch it.
+    match /challenges/{challengeId}/private/{docId} {
+      allow read, write: if false;
     }
 
     function quizCreate() {

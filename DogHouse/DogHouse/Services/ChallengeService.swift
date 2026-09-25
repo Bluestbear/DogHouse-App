@@ -2,8 +2,9 @@
 //  ChallengeService.swift
 //  DogHouse
 //
-//  Couple challenges (quiz / photo dash / anniversary race), the
-//  anniversary date, and "Whatever I Want" card redemption.
+//  Couple challenges (quiz / photo dash / anniversary race), Play-tab
+//  games and their scorecard, task renegotiation, the anniversary date,
+//  and "Whatever I Want" card redemption.
 //
 
 import SwiftUI
@@ -18,6 +19,8 @@ class ChallengeService: ObservableObject {
     @Published var challenges: [Challenge] = []
     @Published var anniversary: Date?
     @Published var receivedWishes: [Wish] = []
+    @Published var gameStats = GameStats()
+    @Published var taskRenegotiation: TaskRenegotiation?
 
     private(set) var userId: String
     private(set) var partnerId: String?
@@ -25,6 +28,8 @@ class ChallengeService: ObservableObject {
     private var challengesListener: ListenerRegistration?
     private var metaListener: ListenerRegistration?
     private var wishesListener: ListenerRegistration?
+    private var gameStatsListener: ListenerRegistration?
+    private var renegotiationListener: ListenerRegistration?
 
     private var coupleKey: String? {
         guard let partnerId, partnerId != "skipped" else { return nil }
@@ -55,6 +60,8 @@ class ChallengeService: ObservableObject {
         challengesListener?.remove()
         metaListener?.remove()
         wishesListener?.remove()
+        gameStatsListener?.remove()
+        renegotiationListener?.remove()
     }
 
     private func resolvePartnerAndListen() async {
@@ -104,6 +111,36 @@ class ChallengeService: ObservableObject {
                     self.receivedWishes = docs
                         .compactMap { try? self.fs.decode(Wish.self, from: $0) }
                         .sorted { $0.createdAt > $1.createdAt }
+                }
+            }
+
+        startGameListeners(coupleKey: coupleKey)
+    }
+
+    private func startGameListeners(coupleKey: String) {
+        // Both docs are server-written and path-ruled, so the listeners can
+        // attach before either exists.
+        gameStatsListener = fs.gameStatsCollection.document(coupleKey)
+            .addSnapshotListener { [weak self] snapshot, _ in
+                Task { @MainActor [weak self] in
+                    self?.gameStats = GameStats(snapshot?.data() ?? [:])
+                }
+            }
+
+        renegotiationListener = fs.taskRenegotiationCollection.document(coupleKey)
+            .addSnapshotListener { [weak self] snapshot, _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    guard let data = snapshot?.data(),
+                          let by = data["requestedBy"] as? String else {
+                        self.taskRenegotiation = nil
+                        return
+                    }
+                    self.taskRenegotiation = TaskRenegotiation(
+                        requestedBy: by,
+                        requestedAt: (data["requestedAt"] as? Timestamp)?.dateValue(),
+                        accepted: data["status"] as? String == "accepted"
+                    )
                 }
             }
     }
@@ -207,14 +244,118 @@ class ChallengeService: ObservableObject {
         ])
     }
 
-    /// Quizzes the partner started that I still need to answer.
-    var pendingQuizzes: [Challenge] {
-        challenges.filter { $0.type == "quiz" && $0.isActive && !$0.hasAnswered(userId) }
-    }
-
     /// The active app-triggered photo dash, if any.
     var activePhotoDash: Challenge? {
         challenges.first { $0.type == "photo" && $0.isActive }
+    }
+
+    // MARK: - Games (Play tab)
+
+    /// Send a game. The server stores `answerIndex` where the partner's
+    /// phone can't read it until they've guessed.
+    func createGame(_ kind: GameKind, prompt: String, options: [String], answerIndex: Int) async throws {
+        #if DEBUG
+        if AuthService.isDemo {
+            challenges.insert(Challenge(
+                id: UUID().uuidString, coupleKey: "demo", type: "game", title: kind.title,
+                prompt: prompt, createdBy: userId, participants: [userId, "mock_partner"],
+                status: "active", createdAt: Date(), options: options, kind: kind.rawValue), at: 0)
+            return
+        }
+        #endif
+        _ = try requireCouple()
+        try await CloudFunctions.shared.call("createGame", [
+            "kind": kind.rawValue,
+            "prompt": prompt,
+            "options": options,
+            "answerIndex": answerIndex,
+        ])
+    }
+
+    struct GameResult {
+        var correct: Bool
+        var answerIndex: Int
+        /// The WINNER earned a card — which is the author when I guessed wrong.
+        var cardEarned: Bool
+        var winnerId: String?
+    }
+
+    /// Answer a game my partner sent. The server resolves it on the spot.
+    func answerGame(_ game: Challenge, guessIndex: Int) async throws -> GameResult {
+        #if DEBUG
+        if AuthService.isDemo {
+            let answer = Int.random(in: 0..<(game.options?.count ?? 2))
+            let correct = game.gameKind == .likelyTo ? answer != guessIndex : answer == guessIndex
+            if let i = challenges.firstIndex(where: { $0.id == game.id }) {
+                challenges[i].status = "completed"
+                challenges[i].answerIndex = answer
+                challenges[i].guessIndex = guessIndex
+                challenges[i].correct = correct
+                challenges[i].completedAt = Date()
+            }
+            return GameResult(correct: correct, answerIndex: answer, cardEarned: false, winnerId: nil)
+        }
+        #endif
+        let result = try await CloudFunctions.shared.call("answerGame", [
+            "challengeId": game.id,
+            "guessIndex": guessIndex,
+        ])
+        return GameResult(
+            correct: result["correct"] as? Bool ?? false,
+            answerIndex: result["answerIndex"] as? Int ?? 0,
+            cardEarned: result["cardEarned"] as? Bool ?? false,
+            winnerId: result["winnerId"] as? String
+        )
+    }
+
+    /// Games and legacy quizzes waiting on me.
+    var myTurn: [Challenge] {
+        challenges.filter { c in
+            guard c.isActive else { return false }
+            if c.isGame { return c.createdBy != userId }
+            return c.type == "quiz" && !c.hasAnswered(userId)
+        }
+    }
+
+    /// Games and legacy quizzes I sent that my partner hasn't played yet.
+    var theirTurn: [Challenge] {
+        challenges.filter { c in
+            guard c.isActive else { return false }
+            if c.isGame { return c.createdBy == userId }
+            return c.type == "quiz" && c.hasAnswered(userId)
+        }
+    }
+
+    /// Finished games, newest first.
+    var recentResults: [Challenge] {
+        challenges
+            .filter { $0.isGame && !$0.isActive }
+            .sorted { ($0.completedAt ?? $0.createdAt) > ($1.completedAt ?? $1.createdAt) }
+    }
+
+    func wins(for uid: String) -> Int { gameStats.wins[uid] ?? 0 }
+    var myWins: Int { wins(for: userId) }
+    var partnerWins: Int { partnerId.map(wins(for:)) ?? 0 }
+    var myCardProgress: Int { min(gameStats.cardProgress[userId] ?? 0, GameStats.cardEvery) }
+
+    // MARK: - Task renegotiation
+
+    /// request → partner accepts (or declines) → both negotiate → complete.
+    enum RenegotiationAction: String { case request, cancel, accept, decline, complete }
+
+    func renegotiateTasks(_ action: RenegotiationAction) async throws {
+        #if DEBUG
+        if AuthService.isDemo {
+            switch action {
+            case .request: taskRenegotiation = TaskRenegotiation(requestedBy: userId, requestedAt: Date())
+            case .accept: taskRenegotiation?.accepted = true
+            case .cancel, .decline, .complete: taskRenegotiation = nil
+            }
+            return
+        }
+        #endif
+        _ = try requireCouple()
+        try await CloudFunctions.shared.call("taskRenegotiation", ["action": action.rawValue])
     }
 
     // MARK: - Photo Dash (challenges are created by the server at random)
@@ -281,11 +422,37 @@ class ChallengeService: ObservableObject {
 
     private func loadMockData() {
         anniversary = Calendar.current.date(byAdding: .day, value: 12, to: Date())
+        let me = userId, them = "mock_partner"
+        let hour: TimeInterval = 3_600
+        func game(_ id: String, _ kind: GameKind, _ prompt: String, _ options: [String],
+                  by: String, ago: TimeInterval, answer: Int? = nil, guess: Int? = nil,
+                  correct: Bool? = nil, winner: String? = nil) -> Challenge {
+            Challenge(id: id, coupleKey: "demo", type: "game", title: kind.title, prompt: prompt,
+                      createdBy: by, participants: [me, them],
+                      status: answer == nil ? "active" : "completed",
+                      createdAt: Date().addingTimeInterval(-ago), options: options,
+                      winnerId: winner, completedAt: answer == nil ? nil : Date().addingTimeInterval(-ago + hour),
+                      kind: kind.rawValue, answerIndex: answer, guessIndex: guess, correct: correct)
+        }
         challenges = [
-            Challenge(id: "c1", coupleKey: "a_b", type: "quiz", title: "Couple Quiz",
-                      prompt: "What would your partner prefer for a vacation?",
-                      createdBy: "a", participants: ["a", "b"], status: "active",
-                      createdAt: Date(), options: ["Italy 🇮🇹", "Sweden 🇸🇪"], answers: [:]),
+            game("g1", .preference, "What would your partner prefer for a vacation?",
+                 ["Italy 🇮🇹", "Sweden 🇸🇪"], by: them, ago: hour),
+            game("g2", .twoTruths, "Two truths and a lie",
+                 ["I once met a Beatle", "I can juggle", "I've never seen Star Wars"], by: them, ago: 3 * hour),
+            game("g3", .ballKnowledge, "What was the name of my first pet?",
+                 ["Biscuit", "Rex", "Mr. Whiskers"], by: me, ago: 5 * hour),
+            game("g4", .likelyTo, "...fall asleep first on a movie night?",
+                 ["me", "you"], by: them, ago: 26 * hour, answer: 0, guess: 1, correct: true),
+            game("g5", .preference, "Your partner's breakfast pick?",
+                 ["Sweet 🥞", "Savory 🍳"], by: me, ago: 30 * hour, answer: 1, guess: 1,
+                 correct: true, winner: them),
         ]
+        var stats = GameStats()
+        stats.played = 12
+        stats.wins = [me: 7, them: 4]
+        stats.likelyToPlayed = 3
+        stats.inSync = 2
+        stats.cardProgress = [me: 3]
+        gameStats = stats
     }
 }

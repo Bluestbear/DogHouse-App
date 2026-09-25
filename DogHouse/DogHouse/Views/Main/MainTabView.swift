@@ -11,6 +11,8 @@ struct MainTabView: View {
     @StateObject private var notificationService = NotificationService.shared
     // One challenge service shared by Home (games) and Profile (anniversary)
     @StateObject private var challengeService = ChallengeService(userId: "mock_user", partnerId: "mock_partner")
+    // Home judges badges and toasts unlocks; Play shows the shelf.
+    @StateObject private var achievements = AchievementService()
     @State private var selectedTab: AppTab = Self.initialTab
     @State private var showPermissionExplainer = false
     @State private var showWhatsNew = false
@@ -49,12 +51,13 @@ struct MainTabView: View {
     @State private var tourStartedThisSession = false
 
     enum AppTab: Hashable {
-        case home, friends, shop, profile
+        case home, play, friends, shop, profile
     }
 
     private static var initialTab: AppTab {
         #if DEBUG
         if AuthService.isDemoShop { return .shop }
+        if AuthService.isDemoPlay { return .play }
         if AuthService.isDemoFriends { return .friends }
         #endif
         return .home
@@ -63,9 +66,15 @@ struct MainTabView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab("Home", systemImage: "house.fill", value: AppTab.home) {
-                HomeView(challengeService: challengeService)
+                HomeView(achievements: achievements, challengeService: challengeService)
                     .environmentObject(authService)
             }
+
+            Tab("Play", image: "TabBone", value: AppTab.play) {
+                PlayTabView(challengeService: challengeService, achievements: achievements)
+                    .environmentObject(authService)
+            }
+            .badge(challengeService.myTurn.count)
 
             Tab("Friends", systemImage: "person.2.fill", value: AppTab.friends) {
                 FriendsTabView()
@@ -111,6 +120,7 @@ struct MainTabView: View {
             guard let destination else { return }
             switch destination {
             case .home: selectedTab = .home
+            case .play: selectedTab = .play
             case .friends: selectedTab = .friends
             case .shop: selectedTab = .shop
             }

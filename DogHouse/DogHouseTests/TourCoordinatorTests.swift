@@ -87,6 +87,10 @@ struct TourCoordinatorTests {
         #expect(TourStep.input.tab == .profile)
         #expect(TourStep.sendButton.tab == .home)
         #expect(TourStep.sendButton.anchor == .sendButton)
+        #expect(TourStep.tasks.tab == .home)
+        #expect(TourStep.tasks.anchor == .tasksButton)
+        #expect(TourStep.games.tab == .play)
+        #expect(TourStep.games.anchor == .playTiles)
     }
 
     @Test("Partner-page steps flip the scene window; others leave it alone")

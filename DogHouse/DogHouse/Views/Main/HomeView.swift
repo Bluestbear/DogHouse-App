@@ -17,24 +17,18 @@ import FirebaseFirestore
 import WidgetKit
 import OSLog
 
-/// Which game sheet is presented from the Home "+" menu.
-enum GameSheet: Identifiable {
-    case createQuiz, pickQuiz, answerQuizzes, myCards
-    var id: Int { hashValue }
-}
 
 struct HomeView: View {
     @EnvironmentObject var authService: AuthService
     @StateObject private var doghouseService = DoghouseService(userId: "mock_user", partnerId: "mock_partner")
     @StateObject private var notificationService = NotificationService.shared
-    @StateObject private var achievements = AchievementService()
+    @ObservedObject var achievements: AchievementService
     @ObservedObject var challengeService: ChallengeService
     /// The live tour drives the scene page and scroll position so the
     /// control it is pointing at is actually on screen.
     @ObservedObject private var tour = TourCoordinator.shared
 
     @State private var showSendSheet = false
-    @State private var activeGameSheet: GameSheet?
     @State private var isSubmittingPhoto = false
     /// Coarse "now" for everything that changes over minutes and hours: room
     /// level, treat accrual, the 5-hour rose window, "sent 2 hours ago", the
@@ -54,8 +48,7 @@ struct HomeView: View {
     /// to my dog and this says why.
     @State private var showSentToast = false
     @State private var errorMessage: String?
-    @State private var showTasksSheet = false
-    @State private var showAchievementsSheet = false
+    @State private var showTasksDrawer = false
     @State private var showAchievementToast = false
     @State private var unlockedAchievement: Achievement?
     @State private var coupleTasks: [CoupleTask] = []
@@ -115,10 +108,6 @@ struct HomeView: View {
         authService.userProfile?.effectiveGraceCharges ?? UserProfile.maxGraceCharges
     }
 
-    private var myWishCards: Int {
-        authService.userProfile?.wishCards ?? 0
-    }
-
     private var partnerTimeSinceRelease: TimeInterval {
         doghouseService.timeSincePartnerLastRelease(
             accountCreatedAt: authService.partnerProfile?.createdAt,
@@ -141,6 +130,15 @@ struct HomeView: View {
             history: doghouseService.doghouseHistory,
             receiverId: doghouseService.userId,
             accountCreatedAt: authService.userProfile?.createdAt
+        )
+    }
+
+    private var partnerHomeStart: Date? {
+        guard let partnerId = doghouseService.partnerId, partnerId != "skipped" else { return nil }
+        return DoghouseService.homeStartDate(
+            history: doghouseService.doghouseHistory,
+            receiverId: partnerId,
+            accountCreatedAt: authService.partnerProfile?.createdAt
         )
     }
 
@@ -228,6 +226,10 @@ struct HomeView: View {
                 .padding(.bottom, 32)
             }
             .dhPageBackground()
+            .overlay {
+                TasksDrawer(isOpen: $showTasksDrawer, challengeService: challengeService,
+                            partnerName: partnerName)
+            }
             // Bring the tour's target into view before the spotlight lands.
             .onChange(of: tour.currentStep) { _, step in
                 guard let step else { return }
@@ -240,7 +242,7 @@ struct HomeView: View {
                         proxy.scrollTo("tour-send", anchor: .bottom)
                     case .treats:
                         proxy.scrollTo("tour-progress", anchor: .center)
-                    case .welcome, .myRoom, .partnerRoom, .roses, .tasks, .games, .widgets:
+                    case .welcome, .myRoom, .partnerRoom, .roses, .tasks, .widgets:
                         proxy.scrollTo("tour-scene", anchor: .top)
                     default:
                         break
@@ -266,66 +268,6 @@ struct HomeView: View {
             // The greeting header stands in for the title.
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showTasksSheet = true
-                    } label: {
-                        Label("Your Tasks", systemImage: "list.clipboard")
-                    }
-                    .tourAnchor(.tasksButton)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Section("Quizzes") {
-                            Button { activeGameSheet = .createQuiz } label: {
-                                Label("Create Quiz", systemImage: "square.and.pencil")
-                            }
-                            Button { activeGameSheet = .pickQuiz } label: {
-                                Label("Pick Quiz", systemImage: "list.bullet.rectangle")
-                            }
-                            if !challengeService.pendingQuizzes.isEmpty {
-                                Button { activeGameSheet = .answerQuizzes } label: {
-                                    Label("Answer Quizzes (\(challengeService.pendingQuizzes.count))",
-                                          systemImage: "questionmark.bubble")
-                                }
-                            }
-                        }
-                        Button { activeGameSheet = .myCards } label: {
-                            Label("My Cards (\(myWishCards))", systemImage: "ticket")
-                        }
-                    } label: {
-                        Label("Games", systemImage: "plus.circle")
-                    }
-                    .tourAnchor(.gamesMenu)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showAchievementsSheet = true
-                    } label: {
-                        Label("Achievements", systemImage: "trophy")
-                    }
-                }
-            }
-            .sheet(isPresented: $showTasksSheet) {
-                TasksSheetView()
-                    .environmentObject(authService)
-            }
-            .sheet(isPresented: $showAchievementsSheet) {
-                AchievementsSheet(achievements: achievements, snapshot: achievementSnapshot)
-            }
-            .sheet(item: $activeGameSheet) { sheet in
-                switch sheet {
-                case .createQuiz:
-                    CreateQuizSheet(challengeService: challengeService, partnerName: partnerName)
-                case .pickQuiz:
-                    PickQuizSheet(challengeService: challengeService, partnerName: partnerName)
-                case .answerQuizzes:
-                    AnswerQuizzesSheet(challengeService: challengeService, partnerName: partnerName)
-                case .myCards:
-                    MyCardsSheet(challengeService: challengeService, cardCount: myWishCards, partnerName: partnerName)
-                }
-            }
             // Level-ups are hours apart and treats accrue per whole hour, so
             // these poll once a minute. The seconds counters tick themselves
             // (ElapsedTimeText) rather than invalidating this whole body.
@@ -671,7 +613,7 @@ struct HomeView: View {
                 coupleTasks: coupleTasks,
                 coupleTasksLoaded: coupleTasksLoaded,
                 onRequestRedemption: requestRedemption,
-                onShowTasks: { showTasksSheet = true }
+                onShowTasks: { withAnimation(.spring(duration: 0.4)) { showTasksDrawer = true } }
             )
             .task { await loadCoupleTasks() }
         } else {
@@ -890,6 +832,11 @@ struct HomeView: View {
         // The "Marie · Home sweet home" bar used to sit here. The partner's
         // window right above already shows their dog at home, so the bar only
         // repeated it and cost a row of space.
+        if let partnerHomeStart {
+            TimeAtHomeCard(start: partnerHomeStart, elapsed: partnerTimeSinceRelease,
+                           who: "\(partnerName)'s")
+        }
+
         GraceMeterView(charges: myGraceCharges)
 
         if let partner = authService.partnerProfile, partner.hasImmunity,
@@ -1180,6 +1127,7 @@ struct HomeView: View {
 }
 
 #Preview("Living Room") {
-    HomeView(challengeService: ChallengeService(userId: "mock_user", partnerId: "mock_partner"))
+    HomeView(achievements: AchievementService(),
+             challengeService: ChallengeService(userId: "mock_user", partnerId: "mock_partner"))
         .environmentObject(AuthService())
 }
