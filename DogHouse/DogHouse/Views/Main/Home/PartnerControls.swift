@@ -153,9 +153,11 @@ struct PartnerMadeItUpBanner: View {
 }
 
 /// Why the send button is greyed out: they were just let out and are briefly
-/// untouchable.
+/// untouchable. Also shown on my own page after I'm let out, as "You have
+/// immunity!", so the freed dog can see it too.
 struct PartnerImmunityBanner: View {
     let partnerName: String
+    var isMe = false
     let immunityEnd: Date
     /// Coarse "now" — the banner reads "expires in 40 minutes".
     let now: Date
@@ -165,7 +167,7 @@ struct PartnerImmunityBanner: View {
             Image(systemName: "shield.fill")
                 .foregroundStyle(.blue)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(partnerName) has immunity!")
+                Text(isMe ? "You have immunity!" : "\(partnerName) has immunity!")
                     .font(.dhCaptionBold)
                 Text("Expires in \(immunityEnd.timeIntervalSince(now).formattedDuration)")
                     .font(.dhCaption)

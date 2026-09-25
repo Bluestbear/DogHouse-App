@@ -756,6 +756,12 @@ struct HomeView: View {
         if let myHomeStart {
             TimeAtHomeCard(start: myHomeStart, elapsed: timeSinceMyRelease)
         }
+
+        if let me = authService.userProfile, me.hasImmunity,
+           let immunityEnd = me.immunityUntil {
+            PartnerImmunityBanner(partnerName: me.displayName, isMe: true,
+                                  immunityEnd: immunityEnd, now: currentDate)
+        }
     }
 
     /// Tell the sender the make-it-up suggestion is done; they get a push
