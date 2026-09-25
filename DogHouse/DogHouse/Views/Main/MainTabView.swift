@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UserNotifications
 
 struct MainTabView: View {
     @EnvironmentObject var authService: AuthService
@@ -127,10 +128,19 @@ struct MainTabView: View {
             notificationService.pendingDestination = nil
         }
         // Pre-permission explainer: shown once permission is still undecided
-        .task { await authService.recordActivity() }
+        .task {
+            try? await UNUserNotificationCenter.current().setBadgeCount(0)
+            await authService.recordActivity()
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await authService.recordActivity() }
+            // AppDelegate's applicationDidBecomeActive never fires under the
+            // SwiftUI scene lifecycle, so foreground work lives here.
+            // Server pushes set badge=1; clear it whenever the app is opened.
+            UNUserNotificationCenter.current().setBadgeCount(0)
+            // Permission may have changed in Settings while backgrounded.
+            Task { await notificationService.refreshStatus() }
         }
         .task {
             #if DEBUG

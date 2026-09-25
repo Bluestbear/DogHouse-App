@@ -89,13 +89,6 @@ class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNot
         return true
     }
 
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        // Server pushes set badge=1; clear it whenever the app is opened
-        UNUserNotificationCenter.current().setBadgeCount(0)
-        // Status may have changed in Settings while backgrounded
-        Task { await NotificationService.shared.refreshStatus() }
-    }
-
     // MARK: - APNs Token
 
     func application(
