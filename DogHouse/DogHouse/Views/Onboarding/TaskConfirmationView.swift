@@ -35,7 +35,7 @@ struct TaskConfirmationView: View {
                     Text("Your DogHouse Tasks")
                         .font(.dhTitle)
 
-                    Text("Here's the final list. These will be randomly assigned when someone's in the DogHouse.")
+                    Text("Here's the final list. When one of you is in the DogHouse, doing a task the other asked for is a way to make it up.")
                         .font(.dhBody)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

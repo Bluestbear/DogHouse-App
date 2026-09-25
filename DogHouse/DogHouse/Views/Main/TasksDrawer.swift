@@ -144,18 +144,16 @@ struct TasksDrawer: View {
                             .foregroundStyle(.secondary)
                             .padding(.top, 8)
                     } else {
-                        ForEach(coupleTasks) { task in
-                            HStack(spacing: 12) {
-                                Circle()
-                                    .fill(task.isAppSuggestion ? Color.cozyOrange : Color.dogHouseBrown)
-                                    .frame(width: 8, height: 8)
-                                Text(task.title).font(.dhBody)
-                                Spacer(minLength: 0)
-                            }
-                            .padding(12)
-                            .background(Color(.systemGray6))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
+                        // A task is done by the partner of whoever asked
+                        // for it, so each partner's wishes are the other's
+                        // ways out. App suggestions work for either.
+                        taskGroup("For you to do", tasks: coupleTasks.filter {
+                            !$0.isAppSuggestion && $0.suggestedBy != challengeService.userId
+                        })
+                        taskGroup("For \(partnerName) to do", tasks: coupleTasks.filter {
+                            !$0.isAppSuggestion && $0.suggestedBy == challengeService.userId
+                        })
+                        taskGroup("Either of you", tasks: coupleTasks.filter(\.isAppSuggestion))
                     }
                 }
                 .padding(.horizontal, 20)
@@ -171,6 +169,27 @@ struct TasksDrawer: View {
                 .shadow(color: .black.opacity(0.2), radius: 16, x: -4)
                 .ignoresSafeArea(edges: .bottom)
         )
+    }
+
+    @ViewBuilder private func taskGroup(_ title: String, tasks: [CoupleTask]) -> some View {
+        if !tasks.isEmpty {
+            Text(title)
+                .font(.dhCaption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 8)
+            ForEach(tasks) { task in
+                HStack(spacing: 12) {
+                    Circle()
+                        .fill(task.isAppSuggestion ? Color.cozyOrange : Color.dogHouseBrown)
+                        .frame(width: 8, height: 8)
+                    Text(task.title).font(.dhBody)
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+        }
     }
 
     // MARK: - Renegotiation

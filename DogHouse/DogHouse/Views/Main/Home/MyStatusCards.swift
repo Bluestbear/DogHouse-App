@@ -125,9 +125,11 @@ struct MyDoghouseInfoCard: View {
     }
 
     private var tasksDetail: String {
-        coupleTasks.isEmpty
-            ? "None agreed yet — tap to propose some"
-            : "\(coupleTasks.count) you both agreed on"
+        // Only the tasks this dog can do: the ones the partner asked for,
+        // plus the app's. The dog's own requests are the partner's to do.
+        let mine = coupleTasks.filter { $0.suggestedBy != event.receiverId }.count
+        if coupleTasks.isEmpty { return "None agreed yet — tap to propose some" }
+        return mine == 1 ? "1 \(partnerName) would like" : "\(mine) \(partnerName) would like"
     }
 }
 
