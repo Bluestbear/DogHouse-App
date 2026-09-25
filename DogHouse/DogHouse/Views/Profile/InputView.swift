@@ -20,6 +20,7 @@ struct InputView: View {
     @State private var isSending = false
     @State private var showSent = false
     @State private var errorText: String?
+    @FocusState private var messageFocused: Bool
 
     enum FeedbackKind: String, CaseIterable, Identifiable {
         case suggestion = "Suggestion"
@@ -52,6 +53,7 @@ struct InputView: View {
             Section("Your message") {
                 TextEditor(text: $message)
                     .frame(minHeight: 140)
+                    .focused($messageFocused)
             }
 
             if let errorText {
@@ -78,6 +80,16 @@ struct InputView: View {
                 Text("Your message and display name are sent straight to the developer.")
             }
         }
+        // The keyboard used to have no way down, and after sending it hid
+        // the tab bar: drag the form or tap Done to put it away.
+        .scrollDismissesKeyboard(.interactively)
+        .toolbar {
+            if messageFocused {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { messageFocused = false }
+                }
+            }
+        }
         .navigationTitle("Input")
         .dhPageBackground()
         .alert("Thanks! 🐾", isPresented: $showSent) {
@@ -91,6 +103,7 @@ struct InputView: View {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let text = trimmedMessage
         guard !text.isEmpty else { return }
+        messageFocused = false
         isSending = true
         errorText = nil
         Task {
