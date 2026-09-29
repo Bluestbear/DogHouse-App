@@ -443,8 +443,35 @@ class AuthService: ObservableObject {
     /// Idempotent, and that matters beyond efficiency: `partnerCode` is
     /// immutable by security rule, so re-issuing one for a returning user would
     /// be rejected outright.
+    ///
+    /// Also serialised per uid. A first Apple/Google/email sign-in fires the
+    /// auth listener, whose server snapshot finds no profile and calls
+    /// `recoverMissingProfile` while the sign-in's own bootstrap is still in
+    /// flight. Both used to see the document missing and both commit; the
+    /// second batch rewrites `createdAt` and the immutable `partnerCode`, the
+    /// rules deny it, and if that loser was the sign-in call the user saw a
+    /// permissions error on a sign-in that had in fact worked. Now the second
+    /// caller waits for the first and reports `false`.
     @discardableResult
     private func bootstrapProfileIfNeeded(uid: String, displayName: String) async throws -> Bool {
+        if let inFlight = bootstrapInFlight, inFlight.uid == uid {
+            _ = try await inFlight.task.value
+            return false
+        }
+        // Claimed before the first suspension point, so a caller arriving
+        // during the getDocument below finds it.
+        let task = Task { try await self.writeProfileIfMissing(uid: uid, displayName: displayName) }
+        let id = UUID()
+        bootstrapInFlight = (id, uid, task)
+        defer {
+            if bootstrapInFlight?.id == id { bootstrapInFlight = nil }
+        }
+        return try await task.value
+    }
+
+    private var bootstrapInFlight: (id: UUID, uid: String, task: Task<Bool, Error>)?
+
+    private func writeProfileIfMissing(uid: String, displayName: String) async throws -> Bool {
         let userRef = fs.usersCollection.document(uid)
         if try await userRef.getDocument().exists { return false }
 
