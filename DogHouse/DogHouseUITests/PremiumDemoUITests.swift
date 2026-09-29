@@ -143,7 +143,7 @@ final class PremiumDemoUITests: XCTestCase {
         // 8. Settings shows the subscription.
         tab("Profile").tap()
         let status = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "covers Sam")).firstMatch
+            .matching(NSPredicate(format: "label CONTAINS %@", "for you both")).firstMatch
         for _ in 0..<6 where !status.exists { app.swipeUp() }
         XCTAssertTrue(status.waitForExistence(timeout: 5))
         sleep(1)
@@ -167,7 +167,7 @@ final class PremiumDemoUITests: XCTestCase {
         XCTAssertFalse(paywallHeadline.exists)
         tab("Profile").tap()
         let status = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "covers Sam")).firstMatch
+            .matching(NSPredicate(format: "label CONTAINS %@", "for you both")).firstMatch
         for _ in 0..<6 where !status.exists { app.swipeUp() }
         XCTAssertTrue(status.waitForExistence(timeout: 5))
         snap("P-demoPremium-settings")

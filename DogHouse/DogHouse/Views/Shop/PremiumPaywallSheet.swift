@@ -327,14 +327,9 @@ struct PremiumPaywallSheet: View {
     }
 
     private var activeDetail: String {
-        let viaPartner = !(authService.userProfile?.isPremiumActive ?? false)
-            && !purchases.hasPremiumEntitlement
-            && (authService.partnerProfile?.isPremiumActive ?? false)
-        if viaPartner, let partnerName {
-            return "\(partnerName)'s subscription covers you both. Unlimited games and Photo Dash saves are unlocked."
-        }
-        return partnerName.map { "Unlimited games and Photo Dash saves, for you and \($0)." }
-            ?? "Unlimited games and Photo Dash saves are unlocked."
+        authService.partnerProfile == nil
+            ? "Unlimited games and Photo Dash saves are unlocked."
+            : "Unlimited games and Photo Dash saves, for you both."
     }
 
     // MARK: - Messages & footnote

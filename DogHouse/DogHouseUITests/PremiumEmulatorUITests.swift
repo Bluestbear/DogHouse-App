@@ -11,7 +11,7 @@
 //  Shipaton/PURCHASE_SEQUENCE.md, "Premium"):
 //    1. testFreeCoupleIsLimited      one game sends, the next opens the paywall
 //    2. node rc-premium.mjs start sarah   (the PARTNER subscribes)
-//    3. testPartnerPremiumUnlocks     no hint, games send, Settings says "via Sarah"
+//    3. testPartnerPremiumUnlocks     no hint, games send, Settings says "for you both"
 //    4. node rc-premium.mjs expire sarah
 //    5. testFreeCoupleIsLimited again
 //
@@ -118,9 +118,11 @@ final class PremiumEmulatorUITests: XCTestCase {
 
         tab("Profile").tap()
         let status = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "via Sarah")).firstMatch
+            .matching(NSPredicate(format: "label CONTAINS %@", "for you both")).firstMatch
         for _ in 0..<6 where !status.exists { app.swipeUp() }
         XCTAssertTrue(status.waitForExistence(timeout: 5))
+        // Covered, not paying: the shared note instead of an empty Manage sheet.
+        XCTAssertFalse(button(containing: "Manage Subscription").exists)
         sleep(1)
         snap("P3-settings-via-partner")
     }

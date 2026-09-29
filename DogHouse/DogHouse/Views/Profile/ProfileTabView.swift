@@ -98,7 +98,7 @@ struct ProfileTabView: View {
                     .environmentObject(authService)
             }
             .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
-            .alert("Restore Purchases", isPresented: Binding(
+            .alert("DogHouse Premium", isPresented: Binding(
                 get: { premiumNote != nil }, set: { if !$0 { premiumNote = nil } }
             )) {
                 Button("OK", role: .cancel) {}
@@ -389,20 +389,19 @@ struct ProfileTabView: View {
         purchases.isCouplePremium(me: authService.userProfile, partner: authService.partnerProfile)
     }
 
-    /// Who pays, as far as this phone can tell. Mine wins over my partner's.
+    /// Whether this account is the one paying (as far as this phone can tell).
+    /// Deliberately never shown as "who pays": the status reads the same for both.
+    private var isPayer: Bool {
+        purchases.hasPremiumEntitlement || (authService.userProfile?.isPremiumActive ?? false)
+    }
+
     private var premiumStatus: String {
-        let mine = purchases.hasPremiumEntitlement || (authService.userProfile?.isPremiumActive ?? false)
-        if mine {
-            return authService.partnerProfile.map { "Active · covers \($0.displayName) too" } ?? "Active"
-        }
-        if let partner = authService.partnerProfile, partner.isPremiumActive {
-            return "Active · via \(partner.displayName)"
-        }
-        return "Free · 1 game a day"
+        guard isCouplePremium else { return "Free · 1 game a day" }
+        return authService.partnerProfile == nil ? "Active" : "Active · for you both"
     }
 
     private var premiumSection: some View {
-        Section("DogHouse Premium") {
+        Section {
             HStack {
                 Label("Status", systemImage: "crown.fill")
                 Spacer()
@@ -433,10 +432,21 @@ struct ProfileTabView: View {
             }
             .disabled(purchases.isRestoring)
 
-            Button {
-                showManageSubscriptions = true
-            } label: {
-                Label("Manage Subscription", systemImage: "creditcard")
+            // The partner who didn't subscribe has nothing to manage on their
+            // own Apple Account, so they get the footer note instead of an
+            // empty system sheet.
+            if !isCouplePremium || isPayer {
+                Button {
+                    manageSubscription()
+                } label: {
+                    Label("Manage Subscription", systemImage: "creditcard")
+                }
+            }
+        } header: {
+            Text("DogHouse Premium")
+        } footer: {
+            if isCouplePremium && !isPayer {
+                Text("Premium is shared with your partner. It's managed in the App Store settings of the Apple Account that subscribed.")
             }
         }
     }
@@ -445,11 +455,31 @@ struct ProfileTabView: View {
         Task {
             do {
                 let active = try await purchases.restorePurchases()
-                premiumNote = active
-                    ? "Premium is active on this account."
-                    : "No active subscription was found for this Apple Account."
+                if active {
+                    premiumNote = "Premium is active on this Apple Account."
+                } else if isCouplePremium {
+                    premiumNote = "Premium is already active for you both. It's shared with your partner, so there's nothing to restore on this Apple Account."
+                } else {
+                    premiumNote = "No active subscription was found for this Apple Account."
+                }
             } catch {
                 premiumNote = error.localizedDescription
+            }
+        }
+    }
+
+    private func manageSubscription() {
+        #if DEBUG
+        if purchases.isDemo {
+            premiumNote = "Preview mode: in the App Store version this opens your Apple subscription settings, where you can change or cancel the plan."
+            return
+        }
+        #endif
+        Task {
+            // RevenueCat knows which store the subscription is from; Apple's
+            // sheet is the fallback.
+            if !(await purchases.showManageSubscriptions()) {
+                showManageSubscriptions = true
             }
         }
     }

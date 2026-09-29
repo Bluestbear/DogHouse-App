@@ -523,6 +523,27 @@ final class PurchaseService: ObservableObject {
         #endif
     }
 
+    /// Open subscription management for the store the purchase came from
+    /// (App Store, or RevenueCat's Test Store in Debug). Returns false when
+    /// RevenueCat couldn't, so the caller can fall back to Apple's sheet.
+    func showManageSubscriptions() async -> Bool {
+        #if canImport(RevenueCat)
+        guard isAvailable else { return false }
+        #if DEBUG
+        if isDemo { return false }
+        #endif
+        do {
+            try await Purchases.shared.showManageSubscriptions()
+            return true
+        } catch {
+            log.error("showManageSubscriptions failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+        #else
+        return false
+        #endif
+    }
+
     /// Restore a subscription bought on another device or account. Returns
     /// whether the entitlement is active afterwards.
     @discardableResult
