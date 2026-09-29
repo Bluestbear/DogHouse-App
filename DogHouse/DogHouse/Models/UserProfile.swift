@@ -32,6 +32,16 @@ struct UserProfile: Codable, Identifiable {
     var wishCards: Int?
     /// Which Terms of Use version this account accepted (Legal.termsVersion).
     var termsAcceptedVersion: String?
+    /// DogHouse Premium expiry in ms since 1970. Server-only: written by the
+    /// RevenueCat webhook, read by createGame. One partner's subscription
+    /// covers the couple (see PurchaseService.isCouplePremium).
+    var premiumUntil: Double?
+
+    /// Whether this user's own subscription is currently active.
+    var isPremiumActive: Bool {
+        guard let premiumUntil else { return false }
+        return premiumUntil > Date().timeIntervalSince1970 * 1000
+    }
 
     /// Whether this user currently has active immunity from voting
     var hasImmunity: Bool {
