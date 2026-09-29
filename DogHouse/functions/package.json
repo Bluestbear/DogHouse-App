@@ -8,7 +8,9 @@
     "logs": "firebase functions:log",
     "e2e:friends": "npm run build && cd .. && firebase emulators:exec --only firestore,functions --project doghouse-5e80e \"node functions/e2e-friends.mjs\"",
     "e2e:purchases": "npm run build && cd .. && firebase emulators:exec --only firestore,functions --project doghouse-5e80e \"node functions/e2e-purchases.mjs\"",
+    "e2e:premium": "npm run build && cd .. && firebase emulators:exec --only firestore,functions --project doghouse-5e80e \"node functions/e2e-premium.mjs\"",
     "test:nudges": "npm run build && node test-nudges.mjs",
+    "test:premium": "npm run build && node test-premium.mjs",
     "e2e:security": "npm run build && cd .. && firebase emulators:exec --only firestore,functions,auth --project doghouse-5e80e \"node functions/e2e-security.mjs\""
   },
   "engines": {
