@@ -80,7 +80,8 @@ final class PremiumEmulatorUITests: XCTestCase {
         app.buttons["Send"].tap()
         for _ in 0..<40 {
             if paywallHeadline.exists { return false }
-            if !app.buttons["Send"].exists && tile.exists { return true }
+            // Sent = the composer closed (while sending, Send is only a spinner).
+            if !app.buttons["Cancel"].exists && tile.exists { return true }
             usleep(250_000)
         }
         XCTFail("neither sent nor limited")
