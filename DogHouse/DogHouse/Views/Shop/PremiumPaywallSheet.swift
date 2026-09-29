@@ -154,9 +154,10 @@ struct PremiumPaywallSheet: View {
 
     private var perks: some View {
         VStack(alignment: .leading, spacing: 12) {
-            perkRow("gamecontroller.fill", "Unlimited games", "Free couples get one new game a day")
-            perkRow("square.and.arrow.down.fill", "Save Photo Dashes", "Keep the winning photos in your library")
-            perkRow("heart.circle.fill",
+            // The Play tab's own bone, so the perk reads as "more of that tab".
+            perkRow(Image("TabBone"), "Unlimited games", "Free couples get one new game a day")
+            perkRow(Image(systemName: "square.and.arrow.down.fill"), "Save Photo Dashes", "Keep the winning photos in your library")
+            perkRow(Image(systemName: "heart.circle.fill"),
                     "One subscription, two phones",
                     partnerName.map { "Covers \($0) too, no second purchase" } ?? "Covers your partner too")
         }
@@ -167,10 +168,13 @@ struct PremiumPaywallSheet: View {
         .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
     }
 
-    private func perkRow(_ symbol: String, _ title: String, _ detail: String) -> some View {
+    private func perkRow(_ icon: Image, _ title: String, _ detail: String) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.title3)
+            // Resizable so the bone asset and the SF Symbols share one size.
+            icon
+                .resizable()
+                .scaledToFit()
+                .frame(width: 24, height: 24)
                 .foregroundStyle(Color.cozyOrange)
                 .frame(width: 30)
             VStack(alignment: .leading, spacing: 2) {
