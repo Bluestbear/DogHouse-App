@@ -37,6 +37,7 @@ struct GameComposerSheet: View {
     @State private var bankIndex = 0
     @State private var isSending = false
     @State private var error: String?
+    @State private var showPaywall = false
 
     private func trimmed(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -72,6 +73,11 @@ struct GameComposerSheet: View {
                 }
             }
             .onAppear(perform: setUp)
+            // Today's free game is used up. The draft stays put, so after
+            // subscribing the same Send goes through.
+            .sheet(isPresented: $showPaywall) {
+                PremiumPaywallSheet(reason: .gameLimit)
+            }
         }
     }
 
@@ -220,6 +226,14 @@ struct GameComposerSheet: View {
                 )
                 HapticService.shared.success()
                 dismiss()
+            } catch is ChallengeService.DailyGameLimitError {
+                if PurchaseService.shared.hasPremiumEntitlement {
+                    // Paid on this phone, but the server hasn't heard from
+                    // the store yet. Don't sell them what they just bought.
+                    self.error = "Your Premium is still activating. Try again in a moment."
+                } else {
+                    showPaywall = true
+                }
             } catch {
                 self.error = error.localizedDescription
             }
