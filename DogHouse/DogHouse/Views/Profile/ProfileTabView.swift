@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import StoreKit
 
 struct ProfileTabView: View {
     @EnvironmentObject var authService: AuthService
@@ -18,6 +19,10 @@ struct ProfileTabView: View {
     @State private var isDeleting = false
     @State private var showUnpairAlert = false
     @State private var showRepairSheet = false
+    @ObservedObject private var purchases = PurchaseService.shared
+    @State private var showPaywall = false
+    @State private var showManageSubscriptions = false
+    @State private var premiumNote: String?
     @State private var unpairError: String?
     @State private var soundEnabled = SoundService.shared.isEnabled
     @State private var hapticEnabled = HapticService.shared.isEnabled
@@ -45,6 +50,9 @@ struct ProfileTabView: View {
 
                 // Anniversary
                 anniversarySection
+
+                // DogHouse Premium
+                premiumSection
 
                 // Settings
                 settingsSection
@@ -84,6 +92,18 @@ struct ProfileTabView: View {
             .sheet(isPresented: $showRepairSheet) {
                 PairingView()
                     .environmentObject(authService)
+            }
+            .sheet(isPresented: $showPaywall) {
+                PremiumPaywallSheet(reason: .generic)
+                    .environmentObject(authService)
+            }
+            .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
+            .alert("Restore Purchases", isPresented: Binding(
+                get: { premiumNote != nil }, set: { if !$0 { premiumNote = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(premiumNote ?? "")
             }
             .sheet(isPresented: $showAnniversaryPicker) {
                 anniversaryPickerSheet
@@ -359,6 +379,77 @@ struct ProfileTabView: View {
                 tour.start(replay: true)
             } label: {
                 Label("Replay App Tour", systemImage: "sparkles")
+            }
+        }
+    }
+
+    // MARK: - Premium
+
+    private var isCouplePremium: Bool {
+        purchases.isCouplePremium(me: authService.userProfile, partner: authService.partnerProfile)
+    }
+
+    /// Who pays, as far as this phone can tell. Mine wins over my partner's.
+    private var premiumStatus: String {
+        let mine = purchases.hasPremiumEntitlement || (authService.userProfile?.isPremiumActive ?? false)
+        if mine {
+            return authService.partnerProfile.map { "Active · covers \($0.displayName) too" } ?? "Active"
+        }
+        if let partner = authService.partnerProfile, partner.isPremiumActive {
+            return "Active · via \(partner.displayName)"
+        }
+        return "Free · 1 game a day"
+    }
+
+    private var premiumSection: some View {
+        Section("DogHouse Premium") {
+            HStack {
+                Label("Status", systemImage: "crown.fill")
+                Spacer()
+                Text(premiumStatus)
+                    .font(.dhCaption)
+                    .foregroundStyle(isCouplePremium ? Color.freedomGreen : .secondary)
+            }
+            .accessibilityElement(children: .combine)
+
+            if !isCouplePremium {
+                Button {
+                    showPaywall = true
+                } label: {
+                    Label("Get Premium", systemImage: "sparkles")
+                }
+            }
+
+            Button {
+                restorePurchases()
+            } label: {
+                HStack {
+                    Label("Restore Purchases", systemImage: "arrow.clockwise")
+                    if purchases.isRestoring {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(purchases.isRestoring)
+
+            Button {
+                showManageSubscriptions = true
+            } label: {
+                Label("Manage Subscription", systemImage: "creditcard")
+            }
+        }
+    }
+
+    private func restorePurchases() {
+        Task {
+            do {
+                let active = try await purchases.restorePurchases()
+                premiumNote = active
+                    ? "Premium is active on this account."
+                    : "No active subscription was found for this Apple Account."
+            } catch {
+                premiumNote = error.localizedDescription
             }
         }
     }
