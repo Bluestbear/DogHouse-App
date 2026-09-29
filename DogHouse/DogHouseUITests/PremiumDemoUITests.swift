@@ -45,9 +45,13 @@ final class PremiumDemoUITests: XCTestCase {
     private func composeAndSend() {
         let tile = button(containing: "Who's More Likely To")
         XCTAssertTrue(tile.waitForExistence(timeout: 10))
-        // It's the fourth tile in a horizontal row: scroll it into view.
-        for _ in 0..<3 where !tile.isHittable {
-            button(containing: "Ball Knowledge").firstMatch.swipeLeft()
+        // The fourth tile in a horizontal row: drag the row until it's on screen.
+        let screen = app.windows.firstMatch.frame
+        for _ in 0..<4 where tile.frame.maxX > screen.maxX {
+            let y = tile.frame.midY / screen.height
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: y))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: y)))
+            sleep(1)
         }
         tile.tap()
         let me = app.buttons["Me"].firstMatch
@@ -128,7 +132,7 @@ final class PremiumDemoUITests: XCTestCase {
         tab("Home").tap()
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         save.tap()
-        for label in ["Allow", "OK", "Allow Access"] {
+        for label in ["Allow", "Erlauben", "OK", "Allow Access"] { // this sim runs in German
             let allow = springboard.buttons[label]
             if allow.waitForExistence(timeout: 3) { allow.tap(); break }
         }
