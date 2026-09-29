@@ -149,4 +149,27 @@ final class PremiumDemoUITests: XCTestCase {
         sleep(1)
         snap("10-settings-premium")
     }
+
+    /// `-demoPremium`: the demo couple starts subscribed (for recording the premium side).
+    @MainActor
+    func testDemoPremiumStartsUnlocked() throws {
+        app.launchArguments.append("-demoPremium")
+        app.launch()
+        tapIfPresent(app.buttons["I agree"], timeout: 12)
+        tapIfPresent(app.buttons["Maybe later"], timeout: 5)
+        XCTAssertTrue(button(containing: "Who's More Likely To").waitForExistence(timeout: 12))
+        XCTAssertFalse(app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "One free game a day")).firstMatch.exists)
+        snap("P-demoPremium-play")
+        composeAndSend()
+        XCTAssertTrue(button(containing: "Who's More Likely To").waitForExistence(timeout: 8))
+        composeAndSend()
+        XCTAssertTrue(button(containing: "Who's More Likely To").waitForExistence(timeout: 8))
+        XCTAssertFalse(paywallHeadline.exists)
+        tab("Profile").tap()
+        let status = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "covers Sam")).firstMatch
+        for _ in 0..<6 where !status.exists { app.swipeUp() }
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+        snap("P-demoPremium-settings")
+    }
 }
