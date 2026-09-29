@@ -139,10 +139,39 @@ describe("users", () => {
       { treats: 99999 }, { wishCards: 50 }, { immunityUntil: new Date(Date.now() + 1e10) },
       { ownedItemIds: ["hat_crown"] }, { lastTreatAward: new Date(0) }, { graceCharges: 99 },
       { partnerId: ALICE }, { fcmToken: "t" }, { partnerCode: "ABC123" },
+      { premiumUntil: Date.now() + 1e10 }, { premiumProductId: "premium_yearly" },
+      { premiumUpdatedAt: Date.now() },
     ]) {
       await assertFails(setDoc(doc(as("uidNew"), "users", "uidNew"),
         { ...bootstrap("uidNew"), ...extra }));
     }
+  });
+
+  // Premium is written only by the RevenueCat webhook; createGame reads
+  // premiumUntil to lift the daily game limit.
+  test("owner cannot grant themselves premium", async () => {
+    for (const change of [
+      { premiumUntil: Date.now() + 1e10 }, { premiumProductId: "premium_yearly" },
+      { premiumUpdatedAt: Date.now() },
+    ]) {
+      await assertFails(updateDoc(doc(as(ALICE), "users", ALICE), change));
+    }
+  });
+
+  test("a premium user cannot extend, rename or drop their premium fields", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore(), "users", ALICE), {
+        premiumUntil: Date.now() + 1e9, premiumProductId: "premium_six_month",
+        premiumUpdatedAt: Date.now(),
+      });
+    });
+    const ref = doc(as(ALICE), "users", ALICE);
+    await assertFails(updateDoc(ref, { premiumUntil: Date.now() + 1e11 }));
+    await assertFails(updateDoc(ref, { premiumProductId: "premium_yearly" }));
+    await assertFails(updateDoc(ref, { premiumUpdatedAt: 0 }));
+    await assertFails(updateDoc(ref, { premiumUntil: deleteField() }));
+    // The denylist must not break ordinary profile saves for premium users.
+    await assertSucceeds(updateDoc(ref, { displayName: "Al" }));
   });
 
   test("owner cannot backdate createdAt to buy a higher treat rate", async () => {
@@ -686,8 +715,11 @@ describe("challenges", () => {
       { ...race, winnerId: BOB }));
   });
 
-  test("a quiz can be created in the shape the app writes", async () => {
-    await assertSucceeds(setDoc(doc(as(ALICE), "challenges", "quiz2"), {
+  // Was "a quiz can be created in the shape the app writes" (assertSucceeds).
+  // Client quiz creation is gone: it was a route around createGame's
+  // server-side daily game limit. Same payload the old app wrote.
+  test("a client cannot create a quiz (games go through createGame's daily limit)", async () => {
+    await assertFails(setDoc(doc(as(ALICE), "challenges", "quiz2"), {
       coupleKey: COUPLE_KEY, type: "quiz", title: "Couple Quiz", prompt: "Where to?",
       options: ["Italy", "Sweden"], createdBy: ALICE, participants: [ALICE, BOB],
       status: "active", answers: { [ALICE]: { own: "Italy" } }, createdAt: new Date(),
@@ -709,15 +741,16 @@ describe("challenges", () => {
   });
 
   test("a challenge must belong to my own couple", async () => {
+    // Uses the anniversary race, the one kind a client may still create, so
+    // the couple checks (not the type check) are what deny these.
     const strangers = [MALLORY, ALICE].sort().join("_");
-    await assertFails(setDoc(doc(as(MALLORY), "challenges", "quiz3"), {
-      coupleKey: strangers, type: "quiz", participants: [MALLORY, ALICE],
-      status: "active", createdBy: MALLORY, answers: {},
+    await assertFails(setDoc(doc(as(MALLORY), "challenges", `anniv_${strangers}_${YEAR}`), {
+      ...race, coupleKey: strangers, participants: [MALLORY, ALICE],
+      createdBy: MALLORY, winnerId: MALLORY,
     }));
     // Mismatched key and participants.
-    await assertFails(setDoc(doc(as(ALICE), "challenges", "quiz4"), {
-      coupleKey: COUPLE_KEY, type: "quiz", participants: [ALICE, MALLORY],
-      status: "active", createdBy: ALICE, answers: {},
+    await assertFails(setDoc(doc(as(ALICE), "challenges", `anniv_${COUPLE_KEY}_${YEAR}`), {
+      ...race, participants: [ALICE, MALLORY],
     }));
   });
 
@@ -836,6 +869,26 @@ describe("gameStats / taskRenegotiation", () => {
       await assertFails(deleteDoc(doc(as(BOB), coll, COUPLE_KEY)));
     });
   }
+
+  // createGame's free-tier daily limit lives here; resetting it would mean
+  // unlimited games without premium.
+  test("gameStats: the couple cannot reset the daily game counter", async () => {
+    for (const uid of [ALICE, BOB]) {
+      await assertFails(setDoc(doc(as(uid), "gameStats", COUPLE_KEY),
+        { lastGameDay: "1999-01-01", gamesToday: 0 }));
+    }
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "gameStats", COUPLE_KEY),
+        { played: 3, lastGameDay: "2026-09-29", gamesToday: 1 });
+    });
+    for (const uid of [ALICE, BOB]) {
+      const ref = doc(as(uid), "gameStats", COUPLE_KEY);
+      await assertFails(updateDoc(ref, { gamesToday: 0 }));
+      await assertFails(updateDoc(ref, { lastGameDay: "1999-01-01" }));
+      await assertFails(updateDoc(ref, { gamesToday: deleteField(), lastGameDay: deleteField() }));
+      await assertFails(deleteDoc(ref));
+    }
+  });
 });
 
 // ───────────────────────── server-only collections ─────────────────────────

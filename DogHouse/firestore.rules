@@ -71,7 +71,8 @@ service cloud.firestore {
         && request.auth.uid == userId
         && !request.resource.data.keys()
              .hasAny(['treats', 'immunityUntil', 'wishCards', 'ownedItemIds',
-                      'lastTreatAward', 'fcmToken', 'partnerCode'])
+                      'lastTreatAward', 'fcmToken', 'partnerCode',
+                      'premiumUntil', 'premiumProductId', 'premiumUpdatedAt'])
         && request.resource.data.get('graceCharges', 3) == 3
         && request.resource.data.get('partnerId', null) in [null, 'skipped'];
 
@@ -84,8 +85,13 @@ service cloud.firestore {
         && !request.resource.data.diff(resource.data).affectedKeys()
              .hasAny(['treats', 'graceCharges', 'immunityUntil', 'wishCards',
                       'ownedItemIds', 'lastTreatAward', 'lastGraceRecharge',
-                      'createdAt'])
+                      'createdAt', 'premiumUntil', 'premiumProductId',
+                      'premiumUpdatedAt'])
         && !request.resource.data.keys().hasAny(['fcmToken', 'partnerCode']);
+      // premiumUntil / premiumProductId / premiumUpdatedAt are written only
+      // by the RevenueCat webhook; createGame reads premiumUntil to lift the
+      // daily game limit, so a client-set value would be free premium.
+      //
       // createdAt is not a balance, but it picks the room level and so the
       // treat rate claimHomeTreats pays; backdating it bought the top rate.
       // (The server also clamps it to the Auth account's creation time.)
@@ -323,7 +329,8 @@ service cloud.firestore {
       allow read, create, update: if authed() && isMyCoupleKey(coupleKey);
     }
 
-    // Play-tab game stats (wins, card meter, weekly card count) and the
+    // Play-tab game stats (wins, card meter, weekly card count, and
+    // createGame's daily-limit counter lastGameDay / gamesToday) and the
     // "redo our tasks" request. SERVER-ONLY: answerGame and
     // taskRenegotiation write them with admin privileges, and the card meter
     // pays Whatever-I-Want cards, so no client write of any kind. Path-based
@@ -341,9 +348,11 @@ service cloud.firestore {
 
     // Couple challenges (quiz / photo dash / anniversary race / Play game).
     // Play games (type "game") are created and answered ONLY by the
-    // createGame / answerGame callables: the create rule admits quiz and
-    // anniversary only, and the update rule quiz answers and photo claims
-    // only, so neither matches a game.
+    // createGame / answerGame callables: the create rule admits the
+    // anniversary race only, and the update rule quiz answers and photo
+    // claims only, so neither matches a game. Quizzes are no longer
+    // client-created (it bypassed createGame's daily game limit); answering
+    // an existing legacy quiz still is.
     // Participants only; a completed challenge is immutable from clients
     // (which is what makes the anniversary race first-tap-wins), and
     // cardAwarded can only ever be set server-side.
@@ -355,10 +364,10 @@ service cloud.firestore {
       allow read: if authed()
         && (resource == null || request.auth.uid in resource.data.participants);
       //
-      // A client may create only the two kinds the app creates: an active
-      // quiz, or this year's anniversary race (completed at birth, won by its
-      // creator, at the deterministic id ChallengeService uses). Both are for
-      // my own couple. The create used to accept any completed challenge
+      // A client may create only this year's anniversary race (completed at
+      // birth, won by its creator, at the deterministic id ChallengeService
+      // uses), for my own couple. Client quiz creation was removed: it was a
+      // route around createGame's server-side daily game limit. The create used to accept any completed challenge
       // naming its creator winner, and onChallengeWritten paid a card for
       // each — unlimited cards. The trigger now checks provenance too.
       allow create: if authed()
@@ -369,7 +378,7 @@ service cloud.firestore {
         && request.resource.data.coupleKey == coupleKeyOfPair(request.resource.data.participants)
         && isMyCoupleKey(request.resource.data.coupleKey)
         && !request.resource.data.keys().hasAny(['cardAwarded', 'photoData'])
-        && (quizCreate() || anniversaryCreate(challengeId));
+        && anniversaryCreate(challengeId);
       // While active, a participant may answer a quiz (their OWN key in
       // `answers` only, or either partner could rewrite the other's answer to
       // force a match) or claim a photo dash for themselves.
@@ -383,14 +392,6 @@ service cloud.firestore {
     // guessing; only the callables (admin SDK) touch it.
     match /challenges/{challengeId}/private/{docId} {
       allow read, write: if false;
-    }
-
-    function quizCreate() {
-      let d = request.resource.data;
-      return d.type == 'quiz'
-        && d.status == 'active'
-        && !d.keys().hasAny(['winnerId', 'completedAt'])
-        && d.get('answers', {}).keys().hasOnly([request.auth.uid]);
     }
 
     // The id carries the year; local time can be up to 14h either side of
