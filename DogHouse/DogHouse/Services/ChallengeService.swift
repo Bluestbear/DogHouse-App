@@ -38,7 +38,9 @@ class ChallengeService: ObservableObject {
     }
 
     init(userId: String, partnerId: String?) {
-        if userId == "mock_user", let realUid = Auth.auth().currentUser?.uid {
+        // Demo mode stays on the mock data even when the simulator still has a
+        // signed-in Firebase account cached (it used to mix that account in).
+        if userId == "mock_user", !Self.isDemoRun, let realUid = Auth.auth().currentUser?.uid {
             self.userId = realUid
         } else {
             self.userId = userId
@@ -55,6 +57,14 @@ class ChallengeService: ObservableObject {
         } else {
             startListening()
         }
+    }
+
+    private static var isDemoRun: Bool {
+        #if DEBUG
+        AuthService.isDemo
+        #else
+        false
+        #endif
     }
 
     isolated deinit {
