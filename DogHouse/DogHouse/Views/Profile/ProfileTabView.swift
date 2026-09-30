@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import StoreKit
 
 struct ProfileTabView: View {
     @EnvironmentObject var authService: AuthService
@@ -18,6 +19,10 @@ struct ProfileTabView: View {
     @State private var isDeleting = false
     @State private var showUnpairAlert = false
     @State private var showRepairSheet = false
+    @ObservedObject private var purchases = PurchaseService.shared
+    @State private var showPaywall = false
+    @State private var showManageSubscriptions = false
+    @State private var premiumNote: String?
     @State private var unpairError: String?
     @State private var soundEnabled = SoundService.shared.isEnabled
     @State private var hapticEnabled = HapticService.shared.isEnabled
@@ -45,6 +50,9 @@ struct ProfileTabView: View {
 
                 // Anniversary
                 anniversarySection
+
+                // DogHouse Premium
+                premiumSection
 
                 // Settings
                 settingsSection
@@ -84,6 +92,18 @@ struct ProfileTabView: View {
             .sheet(isPresented: $showRepairSheet) {
                 PairingView()
                     .environmentObject(authService)
+            }
+            .sheet(isPresented: $showPaywall) {
+                PremiumPaywallSheet(reason: .generic)
+                    .environmentObject(authService)
+            }
+            .manageSubscriptionsSheet(isPresented: $showManageSubscriptions)
+            .alert("DogHouse Premium", isPresented: Binding(
+                get: { premiumNote != nil }, set: { if !$0 { premiumNote = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(premiumNote ?? "")
             }
             .sheet(isPresented: $showAnniversaryPicker) {
                 anniversaryPickerSheet
@@ -359,6 +379,107 @@ struct ProfileTabView: View {
                 tour.start(replay: true)
             } label: {
                 Label("Replay App Tour", systemImage: "sparkles")
+            }
+        }
+    }
+
+    // MARK: - Premium
+
+    private var isCouplePremium: Bool {
+        purchases.isCouplePremium(me: authService.userProfile, partner: authService.partnerProfile)
+    }
+
+    /// Whether this account is the one paying (as far as this phone can tell).
+    /// Deliberately never shown as "who pays": the status reads the same for both.
+    private var isPayer: Bool {
+        purchases.hasPremiumEntitlement || (authService.userProfile?.isPremiumActive ?? false)
+    }
+
+    private var premiumStatus: String {
+        guard isCouplePremium else { return "Free · 1 game a day" }
+        return authService.partnerProfile == nil ? "Active" : "Active · for you both"
+    }
+
+    private var premiumSection: some View {
+        Section {
+            HStack {
+                Label("Status", systemImage: "crown.fill")
+                Spacer()
+                Text(premiumStatus)
+                    .font(.dhCaption)
+                    .foregroundStyle(isCouplePremium ? Color.freedomGreen : .secondary)
+            }
+            .accessibilityElement(children: .combine)
+
+            if !isCouplePremium {
+                Button {
+                    showPaywall = true
+                } label: {
+                    Label("Get Premium", systemImage: "sparkles")
+                }
+            }
+
+            Button {
+                restorePurchases()
+            } label: {
+                HStack {
+                    Label("Restore Purchases", systemImage: "arrow.clockwise")
+                    if purchases.isRestoring {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(purchases.isRestoring)
+
+            // The partner who didn't subscribe has nothing to manage on their
+            // own Apple Account, so they get the footer note instead of an
+            // empty system sheet.
+            if !isCouplePremium || isPayer {
+                Button {
+                    manageSubscription()
+                } label: {
+                    Label("Manage Subscription", systemImage: "creditcard")
+                }
+            }
+        } header: {
+            Text("DogHouse Premium")
+        } footer: {
+            if isCouplePremium && !isPayer {
+                Text("Premium is shared with your partner. It's managed in the App Store settings of the Apple Account that subscribed.")
+            }
+        }
+    }
+
+    private func restorePurchases() {
+        Task {
+            do {
+                let active = try await purchases.restorePurchases()
+                if active {
+                    premiumNote = "Premium is active on this Apple Account."
+                } else if isCouplePremium {
+                    premiumNote = "Premium is already active for you both. It's shared with your partner, so there's nothing to restore on this Apple Account."
+                } else {
+                    premiumNote = "No active subscription was found for this Apple Account."
+                }
+            } catch {
+                premiumNote = error.localizedDescription
+            }
+        }
+    }
+
+    private func manageSubscription() {
+        #if DEBUG
+        if purchases.isDemo {
+            premiumNote = "Preview mode: in the App Store version this opens your Apple subscription settings, where you can change or cancel the plan."
+            return
+        }
+        #endif
+        Task {
+            // RevenueCat knows which store the subscription is from; Apple's
+            // sheet is the fallback.
+            if !(await purchases.showManageSubscriptions()) {
+                showManageSubscriptions = true
             }
         }
     }

@@ -81,6 +81,13 @@ struct PhotoDashResultCard: View {
     var partnerId: String? = nil
     @State private var showReport = false
 
+    @EnvironmentObject private var authService: AuthService
+    @ObservedObject private var purchases = PurchaseService.shared
+    @State private var showPaywall = false
+    @State private var isSaving = false
+    @State private var saved = false
+    @State private var saveError: String?
+
     /// Decoded once when the photo arrives, not on every redraw. Turning a
     /// base64 string into a UIImage inside `body` re-ran the decode on every
     /// evaluation of the Home screen.
@@ -108,6 +115,9 @@ struct PhotoDashResultCard: View {
                     .font(.dhCaption)
                     .foregroundStyle(.secondary)
                 Spacer()
+                if dash.photoData != nil {
+                    saveButton
+                }
                 // The photo is the partner's; App Store Guideline 1.2 wants a
                 // way to report any photo someone else took.
                 if !iWon, let partnerId {
@@ -129,12 +139,66 @@ struct PhotoDashResultCard: View {
         .background(Color.freedomGreen.opacity(0.10))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .padding(.horizontal, 20)
+        .sheet(isPresented: $showPaywall) {
+            PremiumPaywallSheet(reason: .savePhoto)
+                .environmentObject(authService)
+        }
+        .alert("Couldn't save", isPresented: Binding(
+            get: { saveError != nil }, set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveError ?? "")
+        }
         .task(id: dash.photoData) {
             guard let base64 = dash.photoData else { image = nil; return }
             // Off the main actor: these are camera-sized JPEGs.
             image = await Task.detached(priority: .userInitiated) {
                 Data(base64Encoded: base64).flatMap(UIImage.init(data:))
             }.value
+        }
+    }
+}
+
+extension PhotoDashResultCard {
+    /// Premium saves the photo to the library; free couples see the paywall.
+    /// UI-only gate by design: the photo is already on this phone.
+    private var saveButton: some View {
+        Button {
+            save()
+        } label: {
+            Group {
+                if isSaving {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Label(saved ? "Saved" : "Save",
+                          systemImage: saved ? "checkmark" : "square.and.arrow.down")
+                }
+            }
+            .font(.dhCaptionBold)
+            .foregroundStyle(saved ? Color.freedomGreen : Color.cozyOrange)
+        }
+        .buttonStyle(.plain)
+        .disabled(isSaving || saved)
+        .accessibilityLabel(saved ? "Photo saved" : "Save photo to your library")
+    }
+
+    private func save() {
+        guard purchases.isCouplePremium(me: authService.userProfile, partner: authService.partnerProfile) else {
+            showPaywall = true
+            return
+        }
+        guard let photoData = dash.photoData else { return }
+        isSaving = true
+        Task {
+            defer { isSaving = false }
+            do {
+                try await PhotoLibrarySaver.save(base64: photoData)
+                HapticService.shared.success()
+                withAnimation { saved = true }
+            } catch {
+                saveError = error.localizedDescription
+            }
         }
     }
 }

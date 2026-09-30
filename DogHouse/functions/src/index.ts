@@ -13,6 +13,10 @@ import { onCall, onRequest, HttpsError, CallableRequest } from "firebase-functio
 import { defineSecret } from "firebase-functions/params";
 import * as nodemailer from "nodemailer";
 import { pickNudge, preflight, NudgeMarkers, ActiveEvent } from "./nudges";
+import {
+  FREE_GAMES_PER_DAY, LEGACY_SUBSCRIPTION_PRODUCTS, dayKey, gameDayCount, isCouplePremium,
+  premiumPatch, premiumProductOf, premiumSkipReason,
+} from "./premium";
 
 const REGION = "europe-west1";
 
@@ -1364,11 +1368,17 @@ export const createGame = onCall({ region: REGION }, async (req) => {
       .where("status", "==", "active");
 
     const { partnerId, myName } = await db.runTransaction(async (tx) => {
+      // ── reads (all before any write) ──
       const me = (await tx.get(meRef)).data() ?? {};
       const claimed = me.partnerId as string | undefined;
       const partner = claimed && claimed !== "skipped" ?
         (await tx.get(db.collection("users").doc(claimed))).data() : undefined;
       const partnerId = requireMutualPartner(uid, claimed, partner);
+      const coupleKey = coupleKeyOf(uid, partnerId);
+      const statsRef = db.collection("gameStats").doc(coupleKey);
+      const [privSnap, statsSnap, active] = await Promise.all([
+        tx.get(privateDataRef(uid)), tx.get(statsRef), tx.get(activeQuery),
+      ]);
 
       // No new games while either partner is in the doghouse: sort it out first.
       const stay = await tx.get(db.collection("doghouseEvents")
@@ -1380,14 +1390,31 @@ export const createGame = onCall({ region: REGION }, async (req) => {
           `${inside} in the doghouse. Resolve the issue and you can play!`);
       }
 
-      const active = await tx.get(activeQuery);
       if (active.size >= MAX_ACTIVE_GAMES) {
         throw new HttpsError("resource-exhausted",
           "You have lots of games waiting already. Let your partner catch up first!");
       }
 
+      // Free couples get FREE_GAMES_PER_DAY per calendar day in the creator's
+      // time zone; premium (either partner subscribed) is unlimited. Enforced
+      // here, inside once(), so a retried call never counts twice. The
+      // counter is written for premium couples too, so a subscription lapsing
+      // mid-day limits the very next game.
+      const nowMs = Date.now();
+      const today = dayKey(nowMs, privSnap.data()?.timeZone as string | undefined);
+      const { day, gamesToday } = gameDayCount(
+        statsSnap.data()?.lastGameDay, statsSnap.data()?.gamesToday, today);
+      if (!isCouplePremium(me, partner, nowMs) && gamesToday >= FREE_GAMES_PER_DAY) {
+        throw new HttpsError("resource-exhausted", "daily-game-limit",
+          { reason: "daily-game-limit" });
+      }
+
+      // ── writes ──
+      // gameStats also holds the couple's scorecard (answerGame), so merge:
+      // a plain set would wipe wins/played/cardProgress.
+      tx.set(statsRef, { lastGameDay: day, gamesToday: gamesToday + 1 }, { merge: true });
       tx.set(gameRef, {
-        coupleKey: coupleKeyOf(uid, partnerId), type: "game", kind,
+        coupleKey, type: "game", kind,
         title: spec.title, prompt, options, createdBy: uid,
         participants: [uid, partnerId], status: "active", createdAt: Timestamp.now(),
       });
@@ -2740,6 +2767,22 @@ export const revenuecatWebhook = onRequest(
       return;
     }
 
+    // Premium subscriptions are dispatched BEFORE anything treat-related, so
+    // a subscription event can never credit treats. Routed on product id:
+    // the legacy DogHouse+ products share the entitlement and must not grant.
+    const premiumProduct = premiumProductOf(event);
+    if (premiumProduct) {
+      await handlePremiumEvent(event, premiumProduct, res);
+      return;
+    }
+    if (typeof event.product_id === "string" && LEGACY_SUBSCRIPTION_PRODUCTS.has(event.product_id)) {
+      logger.info("[revenuecatWebhook] Ignoring legacy subscription product", {
+        type: event.type, productId: event.product_id,
+      });
+      res.status(200).send("legacy ignored");
+      return;
+    }
+
     const type = event.type;
     if (type !== "NON_RENEWING_PURCHASE") {
       // Consumables can also produce refunds/chargebacks. Treats may already
@@ -2814,3 +2857,69 @@ export const revenuecatWebhook = onRequest(
     }
   }
 );
+
+/**
+ * Applies a premium subscription event to users/{uid}: premiumUntil,
+ * premiumProductId, premiumUpdatedAt. Same auth (checked by the caller),
+ * sandbox gate and uid resolution as the treat path.
+ *
+ * Exactly-once via once(uid, "premium_" + event.id), tagged kind "purchase"
+ * so cleanupIdempotencyKeys keeps it as long as treat-pack keys. Ordering:
+ * RevenueCat can deliver out of order, so an event older than the stored
+ * premiumUpdatedAt is dropped inside the transaction.
+ */
+async function handlePremiumEvent(
+  event: Record<string, unknown>,
+  productId: string,
+  res: { status: (code: number) => { send: (body: string) => unknown } }
+): Promise<void> {
+  const type = event.type;
+  const skip = premiumSkipReason(event);
+  if (skip) {
+    if (skip !== "no change" && skip !== "ignored") {
+      logger.warn("[revenuecatWebhook] Malformed premium event", { type, id: event.id, skip });
+    }
+    res.status(200).send(skip);
+    return;
+  }
+
+  const environment = typeof event.environment === "string" ? event.environment : "UNKNOWN";
+  if (environment === "SANDBOX" && !ALLOW_SANDBOX_PURCHASES) {
+    logger.info("[revenuecatWebhook] Ignoring SANDBOX premium event");
+    res.status(200).send("sandbox ignored");
+    return;
+  }
+
+  const uid = await resolvePurchaseUid(event);
+  if (!uid) {
+    logger.error("[revenuecatWebhook] No user for premium event", {
+      appUserId: event.app_user_id, id: event.id, type, productId,
+    });
+    res.status(200).send("no such user");
+    return;
+  }
+
+  try {
+    const result = await once(uid, `premium_${event.id as string}`, async () => {
+      const applied = await db.runTransaction(async (tx) => {
+        const meRef = db.collection("users").doc(uid);
+        const me = await tx.get(meRef);
+        if (!me.exists) throw new Error(`user ${uid} vanished before premium update`);
+        const patch = premiumPatch(event, productId, me.get("premiumUpdatedAt"));
+        if (patch === "stale") return undefined;
+        tx.update(meRef, patch);
+        return patch;
+      });
+      return applied ?
+        { applied: true, type: type as string, productId, environment,
+          premiumUntil: applied.premiumUntil } :
+        { applied: false, type: type as string, productId, environment, reason: "stale" };
+    }, "purchase");
+
+    logger.info("[revenuecatWebhook] Premium event", { uid, id: event.id, ...result });
+    res.status(200).send(result.applied ? "ok" : "stale");
+  } catch (e) {
+    logger.error("[revenuecatWebhook] Premium update failed", { uid, id: event.id, error: e });
+    res.status(500).send("error");
+  }
+}

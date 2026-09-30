@@ -101,6 +101,40 @@ struct TreatPack: Identifiable, Hashable {
     #endif
 }
 
+/// One DogHouse Premium plan (the `premium` offering). Like `TreatPack`, free
+/// of RevenueCat types so the paywall compiles without the SDK.
+struct PremiumPlan: Identifiable, Hashable {
+    let id: String              // App Store product id
+    let title: String           // "6 months" / "Yearly"
+    let displayPrice: String    // Localized, straight from the store
+    /// "per 6 months" / "per year".
+    let periodLabel: String
+    /// "7 days free", when the store offers a free trial on this product.
+    let trialLabel: String?
+    /// e.g. "$2.08/month", for comparing plans at a glance.
+    let perMonthLabel: String?
+
+    var isYearly: Bool { id == PremiumPlan.yearlyId }
+
+    static let sixMonthId = "premium_six_month"
+    static let yearlyId = "premium_yearly"
+    /// RevenueCat entitlement both plans unlock.
+    static let entitlementId = "DogHouse+"
+    /// RevenueCat offering holding the two plans. The Treat Store keeps
+    /// reading `offerings.current`.
+    static let offeringId = "premium"
+
+    #if DEBUG
+    /// Fake plans for `-demoOnboarding` runs, at the Test Store prices.
+    static let demoPlans: [PremiumPlan] = [
+        PremiumPlan(id: sixMonthId, title: "6 months", displayPrice: "$17.99",
+                    periodLabel: "per 6 months", trialLabel: nil, perMonthLabel: "$3.00/month"),
+        PremiumPlan(id: yearlyId, title: "Yearly", displayPrice: "$24.99",
+                    periodLabel: "per year", trialLabel: "7 days free", perMonthLabel: "$2.08/month"),
+    ]
+    #endif
+}
+
 // MARK: - Service
 
 @MainActor
@@ -139,12 +173,27 @@ final class PurchaseService: ObservableObject {
 
     private let log = Logger(subsystem: Logger.subsystem, category: "purchases")
 
+    // Premium
+    @Published private(set) var premiumPlans: [PremiumPlan] = []
+    @Published private(set) var isLoadingPremium = false
+    @Published private(set) var subscribingPlanId: String?
+    @Published private(set) var isRestoring = false
+    /// This device's RevenueCat view of the `DogHouse+` entitlement. Optimistic:
+    /// it flips the moment the purchaser pays, before the webhook has written
+    /// `premiumUntil`. The server stays the authority for the game limit.
+    @Published private(set) var hasPremiumEntitlement = false
+
     #if canImport(RevenueCat)
     /// Product id → the RevenueCat package to buy, kept out of `TreatPack`.
     private var packagesByProductId: [String: Package] = [:]
+    private var premiumPackagesById: [String: Package] = [:]
     #endif
 
-    private init() {}
+    private init() {
+        #if DEBUG
+        hasPremiumEntitlement = Self.demoStartsPremium
+        #endif
+    }
 
     /// Whether treat packs can be offered at all. False until a key that is
     /// valid for this kind of build is set, which is what keeps the Shop from
@@ -164,7 +213,24 @@ final class PurchaseService: ObservableObject {
     /// Demo runs never touch StoreKit: `buy` pretends to pay and the Shop
     /// credits the balance locally through `AuthService.demoAddTreats`.
     var isDemo: Bool { AuthService.isDemo }
+
+    /// `-demoPremium`: the demo couple starts subscribed. Without it the demo
+    /// starts free, so the daily limit and the paywall can be recorded.
+    static let demoStartsPremium = AuthService.isDemo
+        && ProcessInfo.processInfo.arguments.contains("-demoPremium")
+
+    /// Premium as the demo's local game limit sees it.
+    var demoCouplePremium: Bool { hasPremiumEntitlement }
     #endif
+
+    /// Whether the couple is premium: my own `premiumUntil`, my partner's,
+    /// or this device's entitlement (optimistic, until the webhook lands).
+    /// One subscription covers both, so unpairing drops it for the non-payer.
+    func isCouplePremium(me: UserProfile?, partner: UserProfile?) -> Bool {
+        hasPremiumEntitlement
+            || (me?.isPremiumActive ?? false)
+            || (partner?.isPremiumActive ?? false)
+    }
 
     // MARK: - Lifecycle
 
@@ -188,6 +254,13 @@ final class PurchaseService: ObservableObject {
         log.notice("Configuring RevenueCat against the \(store, privacy: .public)")
         Purchases.logLevel = .warn
         Purchases.configure(withAPIKey: Self.publicSDKKey)
+        // Keep the premium entitlement current (purchase, renewal, expiry,
+        // restore on another device) without polling.
+        Task { [weak self] in
+            for await info in Purchases.shared.customerInfoStream {
+                self?.applyCustomerInfo(info)
+            }
+        }
         #endif
     }
 
@@ -202,7 +275,8 @@ final class PurchaseService: ObservableObject {
         #if canImport(RevenueCat)
         guard isAvailable else { return }
         do {
-            _ = try await Purchases.shared.logIn(uid)
+            let (info, _) = try await Purchases.shared.logIn(uid)
+            applyCustomerInfo(info)
         } catch {
             log.error("RevenueCat logIn failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -239,6 +313,9 @@ final class PurchaseService: ObservableObject {
         _ = try? await Purchases.shared.logOut()
         packs = []
         packagesByProductId = [:]
+        premiumPlans = []
+        premiumPackagesById = [:]
+        hasPremiumEntitlement = false
         #endif
     }
 
@@ -323,6 +400,170 @@ final class PurchaseService: ObservableObject {
         // Paid. The webhook credits the treats; the balance will arrive on the
         // user-document listener within a few seconds.
         return true
+        #else
+        return false
+        #endif
+    }
+
+    // MARK: - Premium (couple-shared subscription)
+
+    /// Load the two premium plans from the `premium` offering. The Treat
+    /// Store's `loadPacks` keeps reading `offerings.current`.
+    func loadPremium() async {
+        #if DEBUG
+        if isDemo {
+            premiumPlans = PremiumPlan.demoPlans
+            return
+        }
+        #endif
+        #if canImport(RevenueCat)
+        guard isAvailable, !isLoadingPremium else { return }
+        isLoadingPremium = true
+        defer { isLoadingPremium = false }
+
+        await ensureIdentified()
+
+        do {
+            let offerings = try await Purchases.shared.offerings()
+            let available = offerings.offering(identifier: PremiumPlan.offeringId)?.availablePackages ?? []
+
+            var loaded: [PremiumPlan] = []
+            var index: [String: Package] = [:]
+            for package in available {
+                let product = package.storeProduct
+                let id = product.productIdentifier
+                guard id == PremiumPlan.sixMonthId || id == PremiumPlan.yearlyId else {
+                    log.notice("Skipping unexpected premium product \(id, privacy: .public)")
+                    continue
+                }
+                // Only advertise a trial the store would actually give.
+                var trialLabel: String?
+                if let intro = product.introductoryDiscount, intro.paymentMode == .freeTrial {
+                    let eligibility = await Purchases.shared.checkTrialOrIntroDiscountEligibility(product: product)
+                    if eligibility != .ineligible {
+                        trialLabel = Self.trialLabel(intro.subscriptionPeriod)
+                    }
+                }
+                let isYearly = id == PremiumPlan.yearlyId
+                loaded.append(PremiumPlan(
+                    id: id,
+                    title: isYearly ? "Yearly" : "6 months",
+                    displayPrice: product.localizedPriceString,
+                    periodLabel: isYearly ? "per year" : "per 6 months",
+                    trialLabel: trialLabel,
+                    perMonthLabel: product.localizedPricePerMonth.map { "\($0)/month" }
+                ))
+                index[id] = package
+            }
+            // 6 months first, yearly (the highlighted one) last.
+            premiumPlans = loaded.sorted { !$0.isYearly && $1.isYearly }
+            premiumPackagesById = index
+        } catch {
+            log.error("Loading premium offering failed: \(error.localizedDescription, privacy: .public)")
+        }
+        #endif
+    }
+
+    #if canImport(RevenueCat)
+    /// "7 days free" / "1 month free" from a trial period.
+    private static func trialLabel(_ period: SubscriptionPeriod) -> String {
+        let days = period.unit == .week ? period.value * 7 : (period.unit == .day ? period.value : nil)
+        if let days { return "\(days) days free" }
+        let unit = period.unit == .month ? "month" : "year"
+        return "\(period.value) \(unit)\(period.value == 1 ? "" : "s") free"
+    }
+
+    private func applyCustomerInfo(_ info: CustomerInfo) {
+        hasPremiumEntitlement = info.entitlements[PremiumPlan.entitlementId]?.isActive == true
+    }
+    #endif
+
+    /// Refresh the local entitlement (on launch and when the paywall opens).
+    func refreshEntitlement() async {
+        #if DEBUG
+        if isDemo { return }
+        #endif
+        #if canImport(RevenueCat)
+        guard isAvailable else { return }
+        if let info = try? await Purchases.shared.customerInfo() {
+            applyCustomerInfo(info)
+        }
+        #endif
+    }
+
+    /// Run the subscription purchase. Returns true when the user subscribed
+    /// (or started the trial). Never writes `premiumUntil`: the webhook does,
+    /// and it reaches both partners through their user-document listeners.
+    @discardableResult
+    func subscribe(_ plan: PremiumPlan) async throws -> Bool {
+        #if DEBUG
+        if isDemo {
+            subscribingPlanId = plan.id
+            defer { subscribingPlanId = nil }
+            try? await Task.sleep(for: .seconds(0.9))
+            hasPremiumEntitlement = true
+            return true
+        }
+        #endif
+        #if canImport(RevenueCat)
+        guard let package = premiumPackagesById[plan.id] else { return false }
+
+        subscribingPlanId = plan.id
+        defer { subscribingPlanId = nil }
+
+        // The webhook keys premium on this uid; never subscribe anonymously.
+        await ensureIdentified()
+
+        let result = try await Purchases.shared.purchase(package: package)
+        guard !result.userCancelled else { return false }
+        applyCustomerInfo(result.customerInfo)
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    /// Open subscription management for the store the purchase came from
+    /// (App Store, or RevenueCat's Test Store in Debug). Returns false when
+    /// RevenueCat couldn't, so the caller can fall back to Apple's sheet.
+    func showManageSubscriptions() async -> Bool {
+        #if canImport(RevenueCat)
+        guard isAvailable else { return false }
+        #if DEBUG
+        if isDemo { return false }
+        #endif
+        do {
+            try await Purchases.shared.showManageSubscriptions()
+            return true
+        } catch {
+            log.error("showManageSubscriptions failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+        #else
+        return false
+        #endif
+    }
+
+    /// Restore a subscription bought on another device or account. Returns
+    /// whether the entitlement is active afterwards.
+    @discardableResult
+    func restorePurchases() async throws -> Bool {
+        #if DEBUG
+        if isDemo {
+            isRestoring = true
+            defer { isRestoring = false }
+            try? await Task.sleep(for: .seconds(0.6))
+            return hasPremiumEntitlement
+        }
+        #endif
+        #if canImport(RevenueCat)
+        guard isAvailable else { return false }
+        isRestoring = true
+        defer { isRestoring = false }
+        await ensureIdentified()
+        let info = try await Purchases.shared.restorePurchases()
+        applyCustomerInfo(info)
+        return hasPremiumEntitlement
         #else
         return false
         #endif

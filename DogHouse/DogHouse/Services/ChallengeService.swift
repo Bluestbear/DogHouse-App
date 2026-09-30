@@ -10,6 +10,7 @@
 import SwiftUI
 import Combine
 import FirebaseAuth
+import FirebaseFunctions
 // @preconcurrency: the Firestore ObjC transaction API predates Sendable
 // annotation. The closure runs on Firestore's own queue and touches no
 // actor-isolated state, so the suppressed warning is not a real race.
@@ -37,7 +38,9 @@ class ChallengeService: ObservableObject {
     }
 
     init(userId: String, partnerId: String?) {
-        if userId == "mock_user", let realUid = Auth.auth().currentUser?.uid {
+        // Demo mode stays on the mock data even when the simulator still has a
+        // signed-in Firebase account cached (it used to mix that account in).
+        if userId == "mock_user", !Self.isDemoRun, let realUid = Auth.auth().currentUser?.uid {
             self.userId = realUid
         } else {
             self.userId = userId
@@ -54,6 +57,14 @@ class ChallengeService: ObservableObject {
         } else {
             startListening()
         }
+    }
+
+    private static var isDemoRun: Bool {
+        #if DEBUG
+        AuthService.isDemo
+        #else
+        false
+        #endif
     }
 
     isolated deinit {
@@ -216,25 +227,9 @@ class ChallengeService: ObservableObject {
 
     // MARK: - Quiz
 
-    /// Create a quiz (custom prompt or picked from the bank) with the
-    /// creator's own answer already filled in; the partner answers later
-    /// and the Cloud Function reveals whether the answers match.
-    func createQuiz(prompt: String, optionA: String, optionB: String,
-                    own: String, title: String = "Couple Quiz") async throws {
-        let (coupleKey, partnerId) = try requireCouple()
-        try await fs.challengesCollection.document().setData([
-            "coupleKey": coupleKey,
-            "type": "quiz",
-            "title": title,
-            "prompt": prompt,
-            "options": [optionA, optionB],
-            "createdBy": userId,
-            "participants": [userId, partnerId],
-            "status": "active",
-            "answers": [userId: ["own": own]],
-            "createdAt": Timestamp(date: Date())
-        ])
-    }
+    // Legacy quizzes can still be answered. New ones can't be created from the
+    // client any more (rules deny it): games go through createGame, which
+    // enforces the free daily limit.
 
     /// Submit my own answer. The Cloud Function resolves the quiz
     /// (match or no match) once both partners have answered.
@@ -256,6 +251,12 @@ class ChallengeService: ObservableObject {
     func createGame(_ kind: GameKind, prompt: String, options: [String], answerIndex: Int) async throws {
         #if DEBUG
         if AuthService.isDemo {
+            // Same rule as the server: one free game a day unless the couple
+            // is premium. Counted from launch so the first send always works.
+            if !PurchaseService.shared.demoCouplePremium, demoGamesToday >= 1 {
+                throw DailyGameLimitError()
+            }
+            demoGamesToday += 1
             challenges.insert(Challenge(
                 id: UUID().uuidString, coupleKey: "demo", type: "game", title: kind.title,
                 prompt: prompt, createdBy: userId, participants: [userId, "mock_partner"],
@@ -264,13 +265,37 @@ class ChallengeService: ObservableObject {
         }
         #endif
         _ = try requireCouple()
-        try await CloudFunctions.shared.call("createGame", [
-            "kind": kind.rawValue,
-            "prompt": prompt,
-            "options": options,
-            "answerIndex": answerIndex,
-        ])
+        do {
+            try await CloudFunctions.shared.call("createGame", [
+                "kind": kind.rawValue,
+                "prompt": prompt,
+                "options": options,
+                "answerIndex": answerIndex,
+            ])
+        } catch let error as NSError where DailyGameLimitError.matches(error) {
+            throw DailyGameLimitError()
+        }
     }
+
+    /// The couple has used today's free game (createGame's
+    /// `resource-exhausted` with reason `daily-game-limit`). The composer
+    /// answers it with the premium paywall.
+    struct DailyGameLimitError: LocalizedError {
+        var errorDescription: String? { "You've played today's free game. Premium makes games unlimited." }
+
+        /// Matched on the reason, not the code: "too many active games" is
+        /// also resource-exhausted.
+        static func matches(_ error: NSError) -> Bool {
+            let details = error.userInfo[FunctionsErrorDetailsKey] as? [String: Any]
+            return details?["reason"] as? String == "daily-game-limit"
+                || error.localizedDescription == "daily-game-limit"
+        }
+    }
+
+    #if DEBUG
+    /// Games sent this demo session, for the demo's daily limit.
+    private var demoGamesToday = 0
+    #endif
 
     struct GameResult {
         var correct: Bool
@@ -420,6 +445,27 @@ class ChallengeService: ObservableObject {
 
     // MARK: - Mock Data (Preview only)
 
+    /// A drawn stand-in photo (warm gradient + paw) as base64 JPEG, the same
+    /// shape a real photo dash stores. Drawn rather than bundled so the demo
+    /// needs no asset; no emoji, which iOS 26 sims can't render.
+    private static func demoPhotoBase64() -> String? {
+        let size = CGSize(width: 600, height: 400)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let colors = [UIColor.systemOrange.cgColor, UIColor.systemPink.cgColor] as CFArray
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+                ctx.cgContext.drawLinearGradient(gradient, start: .zero,
+                                                 end: CGPoint(x: size.width, y: size.height), options: [])
+            }
+            let config = UIImage.SymbolConfiguration(pointSize: 150, weight: .bold)
+            if let paw = UIImage(systemName: "pawprint.fill", withConfiguration: config)?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                paw.draw(at: CGPoint(x: (size.width - paw.size.width) / 2,
+                                     y: (size.height - paw.size.height) / 2))
+            }
+        }
+        return image.jpegData(compressionQuality: 0.8)?.base64EncodedString()
+    }
+
     private func loadMockData() {
         anniversary = Calendar.current.date(byAdding: .day, value: 12, to: Date())
         let me = userId, them = "mock_partner"
@@ -447,6 +493,13 @@ class ChallengeService: ObservableObject {
                  ["Sweet 🥞", "Savory 🍳"], by: me, ago: 30 * hour, answer: 1, guess: 1,
                  correct: true, winner: them),
         ]
+        // A won photo dash, so the Home result card (and its Save button) shows.
+        challenges.append(Challenge(
+            id: "p1", coupleKey: "demo", type: "photo", title: "Photo Dash",
+            prompt: "Send a picture of your coffee ☕️", createdBy: them, participants: [me, them],
+            status: "completed", createdAt: Date().addingTimeInterval(-2 * hour),
+            photoData: Self.demoPhotoBase64(), winnerId: me,
+            completedAt: Date().addingTimeInterval(-hour)))
         var stats = GameStats()
         stats.played = 12
         stats.wins = [me: 7, them: 4]

@@ -8,6 +8,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>DogHouse uses the camera so you can snap and send a photo during a Photo Dash.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>DogHouse saves your Photo Dash pictures to your photo library when you tap Save.</string>
 	<!-- Analytics starts OFF and is switched on by AnalyticsService.start(),
 	     which reads the user's Profile → Share Usage Data choice. Without
 	     this the SDK collects for the few milliseconds between

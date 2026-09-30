@@ -103,10 +103,12 @@ final class CloudFunctions {
         } else {
             message = error.localizedDescription
         }
-        return NSError(
-            domain: "CloudFunctions",
-            code: error.code,
-            userInfo: [NSLocalizedDescriptionKey: message]
-        )
+        var userInfo: [String: Any] = [NSLocalizedDescriptionKey: message]
+        // Keep the server's structured details (e.g. {reason: "daily-game-limit"})
+        // so callers can tell apart errors that share a code.
+        if let details = error.userInfo[FunctionsErrorDetailsKey] {
+            userInfo[FunctionsErrorDetailsKey] = details
+        }
+        return NSError(domain: "CloudFunctions", code: error.code, userInfo: userInfo)
     }
 }

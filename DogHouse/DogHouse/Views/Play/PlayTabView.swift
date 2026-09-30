@@ -21,11 +21,16 @@ struct PlayTabView: View {
     @State private var showCards = false
     @State private var showAchievements = false
     @State private var showCouplesSoon = false
+    @State private var showPaywall = false
+    @ObservedObject private var purchases = PurchaseService.shared
 
     private var myName: String { authService.userProfile?.displayName ?? "You" }
     private var partnerName: String { authService.partnerProfile?.displayName ?? "Partner" }
     private var myWishCards: Int { authService.userProfile?.wishCards ?? 0 }
     private var myId: String { challengeService.userId }
+    private var isCouplePremium: Bool {
+        purchases.isCouplePremium(me: authService.userProfile, partner: authService.partnerProfile)
+    }
 
     /// Who is sitting in the doghouse, if anyone. Play is locked until it's resolved.
     private var doghouseLockMessage: String? {
@@ -75,6 +80,10 @@ struct PlayTabView: View {
             }
             .sheet(isPresented: $showCards) {
                 MyCardsSheet(challengeService: challengeService, cardCount: myWishCards, partnerName: partnerName)
+            }
+            .sheet(isPresented: $showPaywall) {
+                PremiumPaywallSheet(reason: .generic)
+                    .environmentObject(authService)
             }
             .sheet(isPresented: $showAchievements) {
                 AchievementsSheet(achievements: achievements, snapshot: achievements.lastSnapshot)
@@ -134,6 +143,10 @@ struct PlayTabView: View {
             }
             .scrollClipDisabled()
             .tourAnchor(.playTiles)
+
+            if !isCouplePremium {
+                freeGameHint
+            }
         }
     }
 
@@ -149,6 +162,23 @@ struct PlayTabView: View {
         .background(.ultraThinMaterial)
         .ignoresSafeArea(edges: .top)
         .accessibilityElement(children: .combine)
+    }
+
+    /// Free couples start one new game a day (answering is never limited).
+    private var freeGameHint: some View {
+        Button { showPaywall = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "crown.fill").foregroundStyle(Color.cozyOrange)
+                Text("1 free game a day")
+                    .foregroundStyle(.secondary)
+                Text("· Go unlimited")
+                    .foregroundStyle(Color.cozyOrange)
+            }
+            .font(.dhCaption)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .accessibilityLabel("One free game a day. Get DogHouse Premium for unlimited games.")
     }
 
     private func tint(for kind: GameKind) -> Color {
