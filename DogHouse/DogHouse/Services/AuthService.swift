@@ -115,7 +115,7 @@ class AuthService: ObservableObject {
 
     // MARK: Demo economy (debug builds only)
     //
-    // The real economy is server-only (see CURRENT_STATE.md §2). In demo mode
+    // The real economy is server-only (see the README's security model). In demo mode
     // there is no server, so the Shop applies the same rules locally. These
     // exist purely so the Shop and treat store can be driven end-to-end on a
     // simulator; nothing here is reachable from a release build.

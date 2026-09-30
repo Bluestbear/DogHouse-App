@@ -7,8 +7,7 @@
 //  DH Luke). Nothing is demo-faked: the daily limit comes from createGame and
 //  premium from `premiumUntil` written by the emulator's revenuecatWebhook.
 //
-//  Run one step at a time, with the webhook replay in between (see
-//  Shipaton/PURCHASE_SEQUENCE.md, "Premium"):
+//  Run one step at a time, with the webhook replay in between:
 //    1. testFreeCoupleIsLimited      one game sends, the next opens the paywall
 //    2. node rc-premium.mjs start sarah   (the PARTNER subscribes)
 //    3. testPartnerPremiumUnlocks     no hint, games send, Settings says "for you both"

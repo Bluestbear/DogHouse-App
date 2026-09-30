@@ -14,7 +14,7 @@
 //
 // Not covered here: the ALLOW_SANDBOX_PURCHASES=false branch. It is a
 // compile-time constant in src/index.ts, so it is verified by the manual
-// step in TREAT_PACKS_SETUP.md instead (one Test Store purchase must be
+// step in the README's RevenueCat section instead (one Test Store purchase must be
 // ignored after the flag is flipped and redeployed).
 
 import { initializeApp } from "firebase-admin/app";

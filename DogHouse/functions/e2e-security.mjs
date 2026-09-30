@@ -1,5 +1,5 @@
 // End-to-end check of the 2026-09-23 security fixes against the REAL Cloud
-// Functions in the emulator (CURRENT_STATE.md §15): code-checked pairing,
+// Functions in the emulator: code-checked pairing,
 // mutual-partner checks, challenge card provenance, the redemption reward
 // gate and the createdAt clamp.
 //

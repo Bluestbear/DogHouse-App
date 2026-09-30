@@ -100,7 +100,7 @@ Marketing/App Images/
 Marketing/Neuer Ordner.zip
 QA-Run-*/
 
-# Shipaton 2026 submission working files (demo plan, Devpost draft, captures)
+# Contest submission working files
 Shipaton/
 
 # Firebase client config: every developer downloads their own
@@ -117,5 +117,5 @@ serviceAccount*.json
 emulator-data/
 firebase-export-*/
 
-# Marketing reference photos of real people: not licensed for publication
+# Marketing reference material, not part of the source release
 Marketing/
