@@ -474,7 +474,11 @@ final class PurchaseService: ObservableObject {
     }
 
     private func applyCustomerInfo(_ info: CustomerInfo) {
-        hasPremiumEntitlement = info.entitlements[PremiumPlan.entitlementId]?.isActive == true
+        // The legacy DogHouse+ products share this entitlement but the server
+        // never honours them, so only the two paywall products count here.
+        let active = info.entitlements[PremiumPlan.entitlementId]
+        hasPremiumEntitlement = active?.isActive == true
+            && [PremiumPlan.sixMonthId, PremiumPlan.yearlyId].contains(active?.productIdentifier ?? "")
     }
     #endif
 
