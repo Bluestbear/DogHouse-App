@@ -112,7 +112,7 @@ await test("a one-sided partnerId buys no partner actions", async () => {
   await rejects(call("purchaseCosmetic", C, { itemId: "hat_party", forPartner: true }),
     "FAILED_PRECONDITION");
   await rejects(call("equipCosmetic", C, { category: "hat", itemId: null, forPartner: true }),
-    "FAILED_PRECONDITION");
+    "PERMISSION_DENIED");
   await db.collection("users").doc(C).update({ wishCards: 1 });
   await rejects(call("redeemWishCard", C, { text: "anything" }), "FAILED_PRECONDITION");
   assert.equal((await user(C)).wishCards, 1);

@@ -7,10 +7,13 @@ service cloud.firestore {
     }
 
     // displayName goes into other users' push text, so it is a bounded string.
+    // The client caps names at 40 characters; the bound here is generous
+    // because size() does not count grapheme clusters, and an accented or
+    // emoji name that the client accepted must not be denied.
     function validDisplayName() {
       return !('displayName' in request.resource.data)
         || (request.resource.data.displayName is string
-            && request.resource.data.displayName.size() <= 40);
+            && request.resource.data.displayName.size() <= 160);
     }
 
     function myPartnerId() {

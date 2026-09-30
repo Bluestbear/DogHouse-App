@@ -1005,7 +1005,7 @@ describe("partnerId lockdown", () => {
     await assertFails(updateDoc(doc(as(ALICE), "users", ALICE),
       { "equippedItemIds.hat": "hat_crown" }));
     await assertFails(updateDoc(doc(as(ALICE), "users", ALICE),
-      { displayName: "x".repeat(41) }));
+      { displayName: "x".repeat(161) }));
     await assertSucceeds(updateDoc(doc(as(ALICE), "users", ALICE), { displayName: "Alice" }));
   });
 

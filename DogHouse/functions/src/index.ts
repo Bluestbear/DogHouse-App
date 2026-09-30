@@ -42,10 +42,11 @@ const TREAT_PRODUCTS: Record<string, number> = {
   "com.Harrison.DogHouse.treats.large": 1600,
 };
 
-// Only PRODUCTION store events credit treats or premium. Set to true for the
-// pre-launch sandbox test, then back to false: with it on, any TestFlight
-// tester's free sandbox purchase is delivered by RevenueCat and credited.
-const ALLOW_SANDBOX_PURCHASES = false;
+// In production only PRODUCTION store events credit treats or premium: with
+// sandbox events accepted, any TestFlight tester's free purchase would be
+// delivered by RevenueCat and credited. The emulator accepts them, which is
+// what the e2e harnesses and the Test Store replay rig post.
+const ALLOW_SANDBOX_PURCHASES = process.env.FUNCTIONS_EMULATOR === "true";
 
 // How long a purchase idempotency key is kept. Must comfortably exceed any
 // window in which RevenueCat could re-deliver an event — their automatic

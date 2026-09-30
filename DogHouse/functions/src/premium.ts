@@ -86,9 +86,11 @@ export function premiumProductOf(event: Record<string, unknown>): string | undef
 
 // Event types that set premiumUntil to the event's expiration_at_ms. A trial
 // start arrives as INITIAL_PURCHASE with period_type TRIAL and is treated the
-// same as a paid purchase. EXPIRATION writes an expiry in the past.
+// same as a paid purchase. EXPIRATION writes an expiry in the past, and
+// SUBSCRIPTION_EXTENDED (a store-side extension) moves it later.
 const SETS_EXPIRY = new Set([
   "INITIAL_PURCHASE", "RENEWAL", "PRODUCT_CHANGE", "UNCANCELLATION", "EXPIRATION",
+  "SUBSCRIPTION_EXTENDED",
 ]);
 
 export type PremiumPatch = {
