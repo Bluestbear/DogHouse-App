@@ -107,11 +107,12 @@ and Cloud Functions v2 in `europe-west1`. Every function is in
   any write that puts them back on the public profile.
 - **No enumeration.** `/users` and `partnerCodes` deny `list`. The client only fetches
   profiles by a uid it already knows.
-- **Partner checks are mutual.** `partnerId` is owner-writable, so every partner-scoped
-  callable checks that the partner's document points back (`requireMutualPartner`).
-  Pairing itself goes through the `pairWithCode` callable.
+- **Partner checks are mutual.** Rules only let a client clear its `partnerId` or name
+  someone who already points back, so pairing always goes through the `pairWithCode`
+  callable, and every partner-scoped callable still checks that the partner's document
+  points back (`requireMutualPartner`).
 
-`DogHouse/CURRENT_STATE.md` has the full data model and the reasons behind each rule.
+The comments in `DogHouse/firestore.rules` give the reason behind each rule.
 
 ## RevenueCat: treat packs
 
@@ -151,7 +152,8 @@ up. You can also buy three consumable packs through RevenueCat:
   replay, an unmapped product, anonymous ids, an ignored `CANCELLATION` and the event-id
   fallback.
 
-`DogHouse/TREAT_PACKS_SETUP.md` is the dashboard and App Store Connect checklist.
+Sandbox (TestFlight) purchases are ignored by the webhook unless `ALLOW_SANDBOX_PURCHASES`
+in `functions/src/index.ts` is flipped on for a pre-launch test.
 
 ## Building
 
@@ -301,7 +303,9 @@ to start on a paired, onboarded profile. The UI tests use the same mode.
 
 ## License
 
-The source code is released under the [MIT License](LICENSE).
+The source code is released under the [GNU AGPL v3](LICENSE): you may use, study and
+modify it, and anything built from it, including a hosted service, must be published
+under the same licence.
 
-The DogHouse name, logo, app icon, character designs and image assets are **not** covered
-by the MIT license. [NOTICE](NOTICE) lists exactly which files are excluded.
+The DogHouse name, logo, app icon, dog characters and image assets are **not** covered
+by the licence. [NOTICE](NOTICE) lists exactly what is reserved.
