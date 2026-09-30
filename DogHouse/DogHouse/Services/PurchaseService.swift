@@ -24,7 +24,7 @@
 //  A Release build refuses a `test_` key outright (see `configure`), so a
 //  test key can never reach an archive. Until a real key is pasted the
 //  placeholder keeps `isAvailable` false and the Shop hides the store.
-//  See TREAT_PACKS_SETUP.md.
+//  See the README's RevenueCat section.
 //
 
 import Foundation
@@ -79,7 +79,7 @@ struct TreatPack: Identifiable, Hashable {
     }
 
     /// Treats-per-money advantage over the smallest pack, at the list prices
-    /// in TREAT_PACKS_SETUP.md ($0.99 / $2.99 / $4.99). Worded without a
+    /// in the RevenueCat dashboard ($0.99 / $2.99 / $4.99). Worded without a
     /// currency symbol because the price itself is localized by the store.
     /// Nil for the base tier.
     var bonusLabel: String? {
