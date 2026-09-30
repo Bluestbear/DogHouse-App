@@ -1370,6 +1370,16 @@ export const createGame = onCall({ region: REGION }, async (req) => {
         (await tx.get(db.collection("users").doc(claimed))).data() : undefined;
       const partnerId = requireMutualPartner(uid, claimed, partner);
 
+      // No new games while either partner is in the doghouse: sort it out first.
+      const stay = await tx.get(db.collection("doghouseEvents")
+        .where("receiverId", "in", [uid, partnerId]).where("isActive", "==", true).limit(1));
+      if (!stay.empty) {
+        const inside = stay.docs[0].get("receiverId") === uid ? "You're" :
+          `${(partner?.displayName as string | undefined) ?? "Your partner"} is`;
+        throw new HttpsError("failed-precondition",
+          `${inside} in the doghouse. Resolve the issue and you can play!`);
+      }
+
       const active = await tx.get(activeQuery);
       if (active.size >= MAX_ACTIVE_GAMES) {
         throw new HttpsError("resource-exhausted",

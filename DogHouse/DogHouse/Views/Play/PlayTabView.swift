@@ -13,6 +13,7 @@ struct PlayTabView: View {
     @EnvironmentObject var authService: AuthService
     @ObservedObject var challengeService: ChallengeService
     @ObservedObject var achievements: AchievementService
+    @StateObject private var doghouseService = DoghouseService(userId: "mock_user", partnerId: "mock_partner")
 
     @State private var composing: GameKind?
     @State private var playing: Challenge?
@@ -25,6 +26,15 @@ struct PlayTabView: View {
     private var partnerName: String { authService.partnerProfile?.displayName ?? "Partner" }
     private var myWishCards: Int { authService.userProfile?.wishCards ?? 0 }
     private var myId: String { challengeService.userId }
+
+    /// Who is sitting in the doghouse, if anyone. Play is locked until it's resolved.
+    private var doghouseLockMessage: String? {
+        let me = doghouseService.myDoghouseEvent != nil
+        let partner = doghouseService.partnerDoghouseEvent != nil
+        guard me || partner else { return nil }
+        let who = me && partner ? "You're both" : me ? "You're" : "\(partnerName) is"
+        return "\(who) in the doghouse. Resolve the issue and you can play!"
+    }
 
     var body: some View {
         NavigationStack {
@@ -40,10 +50,16 @@ struct PlayTabView: View {
                 .padding(.top, 4)
                 .padding(.bottom, 28)
             }
+            .disabled(doghouseLockMessage != nil)
             .toolbar(.hidden, for: .navigationBar)
             .dhPageBackground()
             .overlay(alignment: .top) {
                 Color.canvasTop.ignoresSafeArea(edges: .top).frame(height: 0)
+            }
+            .overlay {
+                if let message = doghouseLockMessage {
+                    doghouseLock(message)
+                }
             }
             .sheet(item: $composing) { kind in
                 GameComposerSheet(kind: kind, challengeService: challengeService, partnerName: partnerName)
@@ -119,6 +135,20 @@ struct PlayTabView: View {
             .scrollClipDisabled()
             .tourAnchor(.playTiles)
         }
+    }
+
+    private func doghouseLock(_ message: String) -> some View {
+        VStack(spacing: 10) {
+            Text("🏚️").font(.system(size: 56))
+            Text(message)
+                .font(.title3.bold())
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.ultraThinMaterial)
+        .ignoresSafeArea(edges: .top)
+        .accessibilityElement(children: .combine)
     }
 
     private func tint(for kind: GameKind) -> Color {
