@@ -990,12 +990,8 @@ describe("server-only collections", () => {
   });
 });
 
-// ───────────────────────── staged: partnerId lockdown ─────────────────────────
-//
-// Enable together with the STAGED rule under /users (and the isMyCoupleKey
-// clause) once no build older than 1.1 (6) is in use. Until then 1.1 (5)
-// pairs by writing partnerId directly and these would fail by design.
-describe.skip("staged partnerId lockdown", () => {
+// ───────────────────────── partnerId lockdown ─────────────────────────
+describe("partnerId lockdown", () => {
   test("nobody can point partnerId at a stranger", async () => {
     await assertFails(updateDoc(doc(as(MALLORY), "users", MALLORY), { partnerId: ALICE }));
   });
@@ -1005,7 +1001,17 @@ describe.skip("staged partnerId lockdown", () => {
     await assertSucceeds(updateDoc(doc(as(ALICE), "users", ALICE), { partnerId: deleteField() }));
   });
 
-  test("an ex who re-points at me cannot reach our old couple docs", async () => {
+  test("equippedItemIds and a long displayName are rejected", async () => {
+    await assertFails(updateDoc(doc(as(ALICE), "users", ALICE),
+      { "equippedItemIds.hat": "hat_crown" }));
+    await assertFails(updateDoc(doc(as(ALICE), "users", ALICE),
+      { displayName: "x".repeat(41) }));
+    await assertSucceeds(updateDoc(doc(as(ALICE), "users", ALICE), { displayName: "Alice" }));
+  });
+
+  // Needs the reciprocal isMyCoupleKey check, which stays one-sided (see
+  // the note on that function in firestore.rules).
+  test.skip("an ex who re-points at me cannot reach our old couple docs", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), "coupleMeta", COUPLE_KEY), { anniversary: new Date() });
       await updateDoc(doc(ctx.firestore(), "users", BOB), { partnerId: deleteField() });

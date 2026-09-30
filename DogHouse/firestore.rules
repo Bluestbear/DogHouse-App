@@ -6,6 +6,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // displayName goes into other users' push text, so it is a bounded string.
+    function validDisplayName() {
+      return !('displayName' in request.resource.data)
+        || (request.resource.data.displayName is string
+            && request.resource.data.displayName.size() <= 40);
+    }
+
     function myPartnerId() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid))
                .data.get('partnerId', null);
@@ -16,20 +23,10 @@ service cloud.firestore {
     // uid appears in the key let anyone fabricate a couple doc keyed to a
     // stranger's uid.
     //
-    // STAGED (deploy together with the partnerId lockdown under /users): this
-    // trusts my own partnerId alone, which I can currently point anywhere. So
-    // an ex-partner who re-points at me regains our retained couple docs
-    // (tasks, anniversary, badges). The fix replaces the body below with:
-    //   let parts = coupleKey.split('_');
-    //   let other = parts[0] == request.auth.uid ? parts[1] : parts[0];
-    //   return parts.size() == 2
-    //     && request.auth.uid in parts
-    //     && other == myPartnerId()
-    //     && get(/databases/$(database)/documents/users/$(other)).data
-    //          .get('partnerId', null) == request.auth.uid;
-    // It must wait for pairWithCode: with trigger-completed pairing there is a
-    // moment when only one half points at the other, and a couple listener
-    // attached then is denied and never recovers.
+    // This trusts my own partnerId, which the /users rule only lets me point
+    // at someone who already points back. A reciprocal check here would be
+    // stricter still, but a listener attached while one half has just
+    // unpaired would be denied and never recover, so it stays one-sided.
     function isMyCoupleKey(coupleKey) {
       let parts = coupleKey.split('_');
       return parts.size() == 2
@@ -71,8 +68,10 @@ service cloud.firestore {
         && request.auth.uid == userId
         && !request.resource.data.keys()
              .hasAny(['treats', 'immunityUntil', 'wishCards', 'ownedItemIds',
-                      'lastTreatAward', 'fcmToken', 'partnerCode',
-                      'premiumUntil', 'premiumProductId', 'premiumUpdatedAt'])
+                      'equippedItemIds', 'lastTreatAward', 'fcmToken',
+                      'partnerCode', 'premiumUntil', 'premiumProductId',
+                      'premiumUpdatedAt'])
+        && validDisplayName()
         && request.resource.data.get('graceCharges', 3) == 3
         && request.resource.data.get('partnerId', null) in [null, 'skipped'];
 
@@ -84,10 +83,21 @@ service cloud.firestore {
         && request.auth.uid == userId
         && !request.resource.data.diff(resource.data).affectedKeys()
              .hasAny(['treats', 'graceCharges', 'immunityUntil', 'wishCards',
-                      'ownedItemIds', 'lastTreatAward', 'lastGraceRecharge',
-                      'createdAt', 'premiumUntil', 'premiumProductId',
-                      'premiumUpdatedAt'])
-        && !request.resource.data.keys().hasAny(['fcmToken', 'partnerCode']);
+                      'ownedItemIds', 'equippedItemIds', 'lastTreatAward',
+                      'lastGraceRecharge', 'createdAt', 'premiumUntil',
+                      'premiumProductId', 'premiumUpdatedAt'])
+        && !request.resource.data.keys().hasAny(['fcmToken', 'partnerCode'])
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['displayName'])
+            || validDisplayName())
+        // partnerId: a client may clear it, skip, or name someone who already
+        // points back. Only the pairWithCode callable can arrange the latter,
+        // so pairing always goes through the code check.
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['partnerId'])
+            || request.resource.data.get('partnerId', null) in [null, 'skipped']
+            || get(/databases/$(database)/documents/users/$(request.resource.data.partnerId))
+                 .data.get('partnerId', null) == request.auth.uid);
+      // equippedItemIds is written by the equipCosmetic callable, which
+      // checks ownership; a direct write would wear any hat unpaid.
       // premiumUntil / premiumProductId / premiumUpdatedAt are written only
       // by the RevenueCat webhook; createGame reads premiumUntil to lift the
       // daily game limit, so a client-set value would be free premium.
@@ -96,23 +106,9 @@ service cloud.firestore {
       // treat rate claimHomeTreats pays; backdating it bought the top rate.
       // (The server also clamps it to the Auth account's creation time.)
       //
-      // STAGED — do NOT enable until every build in use pairs through the
-      // pairWithCode callable (1.1 (6) and later). Builds up to 1.1 (5) pair
-      // by writing partnerId directly, and this line would break that.
-      // partnerId is still owner-writable to any uid, and onUserPaired links
-      // an unpaired target to whoever names it, no pairing code needed. Once
-      // enabled, a client may only clear its partnerId, skip, or name
-      // someone who already points back (which only pairWithCode can
-      // arrange). Add it as one more && clause on the rule above:
-      //
-      //   && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['partnerId'])
-      //       || request.resource.data.get('partnerId', null) in [null, 'skipped']
-      //       || get(/databases/$(database)/documents/users/$(request.resource.data.partnerId))
-      //            .data.get('partnerId', null) == request.auth.uid)
-      //
-      // and, in the same deploy, make isMyCoupleKey require that the partner
-      // points back (see STAGED note there). Tests: the describe.skip block
-      // "staged partnerId lockdown" in firestore-tests/rules.test.js.
+      // Builds before 1.1 (6) paired by writing partnerId directly; they
+      // must update to pair. Tests: "partnerId lockdown" in
+      // firestore-tests/rules.test.js.
 
       // No partner write path: you can gift your partner a cosmetic (via
       // purchaseCosmetic) but only they decide whether their dog wears it.

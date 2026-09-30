@@ -42,10 +42,10 @@ const TREAT_PRODUCTS: Record<string, number> = {
   "com.Harrison.DogHouse.treats.large": 1600,
 };
 
-// Sandbox purchases credit treats like real ones — the mandatory pre-launch
-// sandbox test depends on it, and exploiting it needs both the webhook secret
-// and a sandbox Apple ID. Flip to false to accept PRODUCTION events only.
-const ALLOW_SANDBOX_PURCHASES = true;
+// Only PRODUCTION store events credit treats or premium. Set to true for the
+// pre-launch sandbox test, then back to false: with it on, any TestFlight
+// tester's free sandbox purchase is delivered by RevenueCat and credited.
+const ALLOW_SANDBOX_PURCHASES = false;
 
 // How long a purchase idempotency key is kept. Must comfortably exceed any
 // window in which RevenueCat could re-deliver an event — their automatic
@@ -127,7 +127,9 @@ const STARTING_TREATS = 100;
  * transaction that read the doc.
  */
 function treatsAfter(me: FirebaseFirestore.DocumentData | undefined, delta: number): number {
-  return ((me?.treats as number | undefined) ?? STARTING_TREATS) + delta;
+  const current = me?.treats;
+  const base = typeof current === "number" && Number.isFinite(current) ? current : STARTING_TREATS;
+  return base + delta;
 }
 
 /** Effective grace = stored + 1 per 24h since lastGraceRecharge, capped. */
@@ -447,21 +449,10 @@ export const onDoghouseEvent = onDocumentWritten(
 );
 
 // ─────────────────────────────────────────────────────────────
-// 1b. Mutual pairing — clients can only write their OWN partnerId
-//     (security rules). When user A sets partnerId=B, this trigger
-//     completes the link by setting B.partnerId=A, so the partner
-//     sitting on the "waiting" screen advances without entering a
-//     code themselves. No loop: when B's doc updates, A already
-//     points at B, so the trigger no-ops.
-//
-//     LEGACY PATH. The trigger cannot tell whether A ever knew B's
-//     pairing code — A may simply have written B's uid — so it links
-//     any unpaired account to anyone who names it. Builds from 1.1 (6)
-//     pair through the pairWithCode callable instead, which checks the
-//     code and links both halves atomically (the trigger then sees an
-//     already-mutual pair and does nothing). Once no build older than
-//     that is in use, the staged partnerId rule in firestore.rules
-//     stops direct writes and this reciprocation becomes unreachable.
+// 1b. Un-pairing. Pairing itself goes through the pairWithCode callable,
+//     which checks the code and links both halves atomically; the rules
+//     only let a client clear its own partnerId (or skip). This trigger
+//     dissolves the old couple's friendships when that happens.
 // ─────────────────────────────────────────────────────────────
 export const onUserPaired = onDocumentUpdated(
   { document: "users/{uid}", region: REGION },
@@ -480,31 +471,6 @@ export const onUserPaired = onDocumentUpdated(
     if (oldPartnerId && oldPartnerId !== "skipped" && oldPartnerId !== newPartnerId) {
       await dissolveCoupleFriendships(coupleKeyOf(uid, oldPartnerId));
     }
-
-    if (!newPartnerId || newPartnerId === "skipped") return;
-    if (before?.partnerId === newPartnerId) return; // not a new pairing
-
-    const partnerRef = db.collection("users").doc(newPartnerId);
-    const partnerSnap = await partnerRef.get();
-    if (!partnerSnap.exists) return;
-    const partnerCurrent = partnerSnap.data()?.partnerId as string | undefined;
-
-    if (partnerCurrent === uid) return; // already mutual — nothing to do
-    if (partnerCurrent && partnerCurrent !== "skipped") {
-      // Partner is paired with someone else; don't steal them.
-      logger.warn(`[pairing] ${uid} → ${newPartnerId}, but they're paired with ${partnerCurrent}`);
-      return;
-    }
-
-    await partnerRef.update({ partnerId: uid });
-    const myName = (after.displayName as string | undefined) ?? "Your partner";
-    await notifyUser(
-      newPartnerId,
-      "❤️ You're paired!",
-      `${myName} connected with you on DogHouse. Let the games begin!`,
-      { data: { type: "doghouse" } }
-    );
-    logger.info(`[pairing] Completed mutual pairing ${uid} ↔ ${newPartnerId}`);
   }
 );
 
@@ -1953,8 +1919,13 @@ export const purchaseCosmetic = onCall({ region: REGION }, async (req) => {
   return once(uid, req.data?.idempotencyKey, async () => {
     const itemId: string = req.data?.itemId;
     const forPartner = req.data?.forPartner === true;
+    // Own-property check: a prototype key like "constructor" would otherwise
+    // resolve to a function, and `treats - price` would write NaN.
+    if (typeof itemId !== "string" ||
+        !Object.prototype.hasOwnProperty.call(COSMETIC_PRICES, itemId)) {
+      throw new HttpsError("invalid-argument", "Unknown item.");
+    }
     const price = COSMETIC_PRICES[itemId];
-    if (price === undefined) throw new HttpsError("invalid-argument", "Unknown item.");
 
     const meRef = db.collection("users").doc(uid);
 
@@ -2808,7 +2779,8 @@ export const revenuecatWebhook = onRequest(
     const transactionId =
       typeof event.transaction_id === "string" ? event.transaction_id :
         typeof event.id === "string" ? event.id : undefined;
-    const amount = productId ? TREAT_PRODUCTS[productId] : undefined;
+    const amount = productId && Object.prototype.hasOwnProperty.call(TREAT_PRODUCTS, productId) ?
+      TREAT_PRODUCTS[productId] : undefined;
 
     if (!transactionId || !amount) {
       // An unmapped product is a configuration mistake, not a transient fault:

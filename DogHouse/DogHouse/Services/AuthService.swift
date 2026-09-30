@@ -530,7 +530,8 @@ class AuthService: ObservableObject {
         do {
             let created = try await bootstrapProfileIfNeeded(
                 uid: userId,
-                displayName: (user.displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                displayName: String((user.displayName ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
             )
             if created {
                 Logger.data.info("Recreated a missing profile document after an interrupted sign-up")
@@ -543,7 +544,8 @@ class AuthService: ObservableObject {
     /// Set the name shown to the partner. Used by the onboarding name step,
     /// which appears when a provider gave us no usable name.
     func updateDisplayName(_ name: String) async throws {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Rules cap displayName at 40 characters (it goes into push text).
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
         guard !trimmed.isEmpty else { return }
         #if DEBUG
         if Self.isDemo {
