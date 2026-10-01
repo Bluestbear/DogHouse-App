@@ -6,11 +6,13 @@ light, and it is built so there is never anything to gain from being petty.
 
 Native SwiftUI on iOS 26, Firebase for the backend, RevenueCat for in-app purchases.
 
-## Demo
+## Screenshots
 
-<!-- TODO: demo video link -->
+| Home, all clear | In the doghouse | Shop | Friends | Play |
+|---|---|---|---|---|
+| ![Home](docs/screenshots/home.png) | ![Doghouse](docs/screenshots/doghouse.png) | ![Shop](docs/screenshots/shop.png) | ![Friends](docs/screenshots/friends.png) | ![Play](docs/screenshots/play.png) |
 
-<!-- TODO: screenshots (Home all-clear, doghouse scene, send sheet, release animation, Shop / Treat Store, friends feed) -->
+Taken from the app's demo mode on an iOS 26.5 simulator (see [Demo mode](#demo-mode-no-backend-at-all)).
 
 ## How it works
 
@@ -41,8 +43,11 @@ someone from each of two friend couples is in the doghouse at the same time, a 3
 jailbreak vote opens among the linked couples. The winner walks free with an hour of
 immunity.
 
-**Between sends** there are quizzes, photo dashes, an anniversary race, roses and
-cosmetics for your dog. Treats buy the cosmetics.
+**Between sends** there are games for two (a preference quiz, "ball knowledge", two truths
+and a lie, "who's more likely to"), photo
+dashes, an anniversary race, roses and cosmetics for your dog. Treats buy the cosmetics. A
+couple gets one game a day for free; DogHouse Premium, one subscription shared by both
+partners, lifts that limit.
 
 ## Architecture
 
@@ -73,7 +78,7 @@ GoogleSignIn and RevenueCat `purchases-ios`. Each feature has a service in
 listeners and publishes state to the views. Every callable goes through `CloudFunctions`,
 which pins the region and retries transient errors with backoff. The rooms, doghouses,
 avatars and cosmetics are drawn in code with SwiftUI shapes. The only raster images are
-the app icon, the launch-screen images and one boot illustration.
+the app icon and the launch-screen images.
 
 **Backend.** Firebase Auth (email, Sign in with Apple, Google), Firestore, Cloud Messaging
 and Cloud Functions v2 in `europe-west1`. Every function is in
@@ -82,7 +87,8 @@ and Cloud Functions v2 in `europe-west1`. Every function is in
 - **Callables:** the only way to change the economy or link two accounts.
   `sendToDoghouse`, `releasePartner`, `requestRedemption`, `sendRoses`,
   `purchaseCosmetic`, `equipCosmetic`, `claimHomeTreats`, `redeemWishCard`,
-  `pairWithCode`, `addCoupleFriend`, `removeCoupleFriend`, `blockUser`, `unblockUser`.
+  `createGame`, `answerGame`, `taskRenegotiation`, `pairWithCode`, `unpairPartner`,
+  `addCoupleFriend`, `removeCoupleFriend`, `blockUser`, `unblockUser`.
 - **Firestore triggers:** push notifications, feed and vote handling, challenge results,
   pairing, account deletion, feedback and report emails.
 - **Scheduled jobs:** expire jailbreak votes, anniversary check, random photo dash,
@@ -105,8 +111,14 @@ and Cloud Functions v2 in `europe-west1`. Every function is in
 - **Secrets live in a private subdocument.** The pairing code and the FCM token are
   stored at `users/{uid}/private/data`, which only the owner can read. The rules reject
   any write that puts them back on the public profile.
-- **No enumeration.** `/users` and `partnerCodes` deny `list`. The client only fetches
-  profiles by a uid it already knows.
+- **No enumeration, no guessing.** `/users` denies `list`, and `partnerCodes` denies every
+  client read: a code is only ever resolved by the `pairWithCode` and `addCoupleFriend`
+  callables, which allow 10 attempts per hour per user. The client only fetches profiles
+  by a uid it already knows.
+- **Unpairing is final.** `unpairPartner` clears both halves of the pair in one
+  transaction and rotates both pairing codes, so an ex cannot re-pair with the code they
+  were handed. Removing a friend couple leaves a server-only tombstone that blocks a
+  silent re-add.
 - **Partner checks are mutual.** Rules only let a client clear its `partnerId` or name
   someone who already points back, so pairing always goes through the `pairWithCode`
   callable, and every partner-scoped callable still checks that the partner's document
@@ -114,7 +126,13 @@ and Cloud Functions v2 in `europe-west1`. Every function is in
 
 The comments in `DogHouse/firestore.rules` give the reason behind each rule.
 
-## RevenueCat: treat packs
+## RevenueCat: treat packs and Premium
+
+RevenueCat powers two things: consumable treat packs and a couple-shared subscription.
+In both cases the app only starts the purchase. The server, told by RevenueCat's
+webhook, is the only thing that changes a balance or an entitlement.
+
+### Treat packs
 
 Treats are the in-app currency. You earn them by keeping your room nice and by making
 up. You can also buy three consumable packs through RevenueCat:
@@ -155,6 +173,35 @@ up. You can also buy three consumable packs through RevenueCat:
 Sandbox (TestFlight) purchases are ignored by the webhook unless `ALLOW_SANDBOX_PURCHASES`
 in `functions/src/index.ts` is flipped on for a pre-launch test.
 
+### Premium (couple-shared subscription)
+
+Two auto-renewing products, `premium_six_month` and `premium_yearly`, attached to the
+`DogHouse+` entitlement. One subscription covers both partners.
+
+- **What it unlocks.** A free couple can create one game per calendar day; Premium lifts
+  the limit. The day is computed in the creator's time zone and only ever moves forward,
+  so two partners in different zones cannot alternate "todays" for extra games
+  (`gameDayCount` in `functions/src/premium.ts`).
+- **Client** (`PurchaseService.swift`, `Views/Shop/PremiumPaywallSheet.swift`). The
+  paywall reads the offering, buys through the SDK and flips a local, optimistic
+  entitlement flag so the purchaser can play straight away. `restorePurchases` is wired.
+  The server stays the authority for the limit.
+- **Server.** `revenuecatWebhook` routes on product id: treat packs go to the credit path,
+  the two Premium products to `handlePremiumEvent`, and RevenueCat's legacy sample
+  products are acknowledged and dropped. The handler writes `premiumUntil`,
+  `premiumProductId` and `premiumUpdatedAt` on the payer's `users/{uid}` document from
+  `INITIAL_PURCHASE` (including a trial), `RENEWAL`, `PRODUCT_CHANGE`,
+  `UNCANCELLATION`, `SUBSCRIPTION_EXTENDED` and `EXPIRATION`. `CANCELLATION` is a
+  deliberate no-op, because access runs to expiry. A couple is Premium when either
+  partner's `premiumUntil` is in the future, so unpairing drops it for the non-payer
+  without an extra write. Events are exactly-once through `once(uid, "premium_<event.id>")`,
+  and an event older than the stored `premiumUpdatedAt` is dropped, because RevenueCat
+  does not guarantee order.
+- **Tests.** `npm run test:premium` checks the pure decision logic with plain Node.
+  `npm run e2e:premium` runs the real functions in the emulator: the daily limit, the
+  couple-shared lift, trial, expiry, exactly-once, out-of-order delivery and the legacy
+  products.
+
 ## Building
 
 **Requirements:**
@@ -182,8 +229,10 @@ Backend tests:
 cd DogHouse/firestore-tests && npm ci && npm test   # rules suite; starts its own emulator
 cd DogHouse/functions && npm ci
 npm run test:nudges                                # pure nudge logic
+npm run test:premium                               # pure Premium logic
 npm run e2e:security                               # security fixes, against emulators
-npm run e2e:purchases                              # RevenueCat webhook
+npm run e2e:purchases                              # RevenueCat webhook, treat packs
+npm run e2e:premium                                # RevenueCat webhook, Premium + game limit
 npm run e2e:friends                                # couple friendships
 ```
 
@@ -299,6 +348,8 @@ to start on a paired, onboarded profile. The UI tests use the same mode.
 | `-demoOnboarding -demoHome -demoKick` | the send ("boot kick") animation |
 | `-demoOnboarding -demoShop` | Shop and Treat Store, with fake packs and simulated purchases |
 | `-demoOnboarding -demoFriends` | Friends tab with a mock feed and jailbreak banner |
+| `-demoOnboarding -demoPlay` | Play tab with mock games and the free-game limit |
+| `-demoOnboarding -demoPlay -demoPremium` | the same, with Premium already active |
 | `-holdSplash` | keeps the launch splash on screen |
 
 ## License
