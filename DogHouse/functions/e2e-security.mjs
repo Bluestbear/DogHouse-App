@@ -8,7 +8,7 @@
 // other e2e scripts it needs functions/.secret.local with dummy secrets.
 
 import { initializeApp } from "firebase-admin/app";
-import { getFirestore, Timestamp } from "firebase-admin/firestore";
+import { getFirestore, Timestamp, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -147,16 +147,38 @@ await test("a real photo dash pays exactly one card", async () => {
   assert.equal((await ref.get()).data().cardAwarded, true);
 });
 
-await test("the anniversary race pays once, only at this year's id", async () => {
+await test("a photo dash claimed without a photo pays nothing", async () => {
+  const ref = db.collection("challenges").doc("dash2");
+  await ref.set({
+    coupleKey: key, type: "photo", participants: [A, B], createdBy: "system",
+    status: "active",
+  });
+  await ref.update({ status: "completed", winnerId: B, photoData: "" });
+  await sleep(2500);
+  assert.equal((await user(B)).wishCards, 1);
+  assert.notEqual((await ref.get()).data().cardAwarded, true);
+});
+
+await test("the anniversary race pays once, only at this year's id, only on the day", async () => {
   const year = new Date().getUTCFullYear();
+  const meta = db.collection("coupleMeta").doc(key);
+  // Anniversary set, but six weeks away.
+  await meta.set({ userIds: [A, B], anniversary: Timestamp.fromMillis(Date.now() + 42 * 86_400_000) });
   await db.collection("challenges").doc(`anniv_${key}_${year + 7}`).set({
     coupleKey: key, type: "anniversary", participants: [A, B], createdBy: A,
     status: "completed", winnerId: A,
   });
-  await db.collection("challenges").doc(`anniv_${key}_${year}`).set({
+  const race = db.collection("challenges").doc(`anniv_${key}_${year}`);
+  await race.set({
     coupleKey: key, type: "anniversary", participants: [A, B], createdBy: A,
     status: "completed", winnerId: A,
   });
+  await sleep(2500);
+  assert.equal((await user(A)).wishCards, undefined);
+
+  // Today it is (stored as local midnight, so a few hours back still counts).
+  await meta.set({ userIds: [A, B], anniversary: Timestamp.fromMillis(Date.now() - 20 * 3_600_000) });
+  await race.update({ nudge: true });
   await waitFor(async () => (await user(A)).wishCards === 1, "the anniversary card");
   await sleep(1500);
   assert.equal((await user(A)).wishCards, 1);
@@ -190,6 +212,82 @@ await test("a backdated createdAt does not buy the top treat rate", async () => 
   });
   const r = await call("claimHomeTreats", D);
   assert.equal(r.awarded, 1); // 1 hour × rate 1, not × 5
+});
+
+const E = "secE";
+const privateDoc = (uid) => db.collection("users").doc(uid).collection("private").doc("data");
+const codeOf = async (uid) => (await privateDoc(uid).get()).data()?.partnerCode;
+const codeExists = async (code) => (await db.collection("partnerCodes").doc(code).get()).exists;
+
+await test("code guessing is rate limited per account", async () => {
+  await auth.createUser({ uid: E }).catch(() => undefined);
+  await db.collection("users").doc(E).set({ displayName: E, createdAt: Timestamp.now() });
+  for (let i = 0; i < 10; i++) {
+    await rejects(call("pairWithCode", E, { code: `ZZZZZ${i}` }), "NOT_FOUND");
+  }
+  await rejects(call("pairWithCode", E, { code: "ZZZZZ0" }), "RESOURCE_EXHAUSTED");
+  // The same budget covers couple codes.
+  await rejects(call("addCoupleFriend", E, { code: "ZZZZZ0" }), "FAILED_PRECONDITION");
+});
+
+await test("a removed couple cannot add itself back with the unchanged code", async () => {
+  // C is still pointing one-sidedly at A from above; clear that, then pair C with D.
+  await db.collection("users").doc(C).update({ partnerId: FieldValue.delete() });
+  await sleep(1500);
+  await call("pairWithCode", D, { code: "CCCCCC" });
+  assert.equal((await user(C)).partnerId, D);
+  await privateDoc(A).set({ partnerCode: "AAAAAA" }, { merge: true });
+  await db.collection("partnerCodes").doc("AAAAAA").set({ userId: A });
+
+  const keyCD = [C, D].sort().join("_");
+  const linkId = [key, keyCD].sort().join("__");
+  await call("addCoupleFriend", A, { code: "CCCCCC" });
+  assert.equal((await db.collection("coupleFriendships").doc(linkId).get()).exists, true);
+
+  // C's couple removes A's couple; A cannot come back...
+  await call("removeCoupleFriend", C, { coupleKey: key });
+  assert.equal((await db.collection("coupleFriendships").doc(linkId).get()).exists, false);
+  await rejects(call("addCoupleFriend", A, { code: "CCCCCC" }), "PERMISSION_DENIED");
+  // ...but the couple that removed can.
+  await call("addCoupleFriend", C, { code: "AAAAAA" });
+  assert.equal((await db.collection("coupleFriendships").doc(linkId).get()).exists, true);
+  assert.equal((await db.collection("friendRemovals").doc(linkId).get()).exists, false);
+  await call("removeCoupleFriend", C, { coupleKey: key });
+});
+
+await test("a build that clears its own partnerId still splits both halves and retires both codes", async () => {
+  assert.equal(await codeOf(C), undefined);
+  await privateDoc(C).set({ partnerCode: "CCCCCC" }, { merge: true });
+  await db.collection("users").doc(C).update({ partnerId: FieldValue.delete() });
+  await waitFor(async () => (await user(D)).partnerId === undefined, "D to be unpaired by the trigger");
+  await waitFor(async () => !(await codeExists("CCCCCC")), "C's old code to be retired");
+  const newC = await codeOf(C), newD = await codeOf(D);
+  assert.match(newC, /^[A-Z2-9]{6}$/);
+  assert.match(newD, /^[A-Z2-9]{6}$/);
+  assert.equal(await codeExists(newC), true);
+  assert.equal(await codeExists(newD), true);
+  await rejects(call("pairWithCode", D, { code: "CCCCCC" }), "NOT_FOUND");
+});
+
+await test("unpairPartner clears both halves and retires both codes; the ex cannot return", async () => {
+  // Every real account carries its code on the private document; the
+  // fixture only wrote the lookup side.
+  await privateDoc(B).set({ partnerCode: "BBBBBB" }, { merge: true });
+  await call("unpairPartner", A);
+  assert.equal((await user(A)).partnerId, undefined);
+  assert.equal((await user(B)).partnerId, undefined);
+  assert.equal(await codeExists("AAAAAA"), false);
+  assert.equal(await codeExists("BBBBBB"), false);
+  const newA = await codeOf(A);
+  assert.match(newA, /^[A-Z2-9]{6}$/);
+  assert.equal((await db.collection("partnerCodes").doc(newA).get()).data().userId, A);
+  // The retained code is dead; a freshly shared one works.
+  await rejects(call("pairWithCode", B, { code: "AAAAAA" }), "NOT_FOUND");
+  await call("pairWithCode", B, { code: newA });
+  assert.equal((await user(A)).partnerId, B);
+  assert.equal((await user(B)).partnerId, A);
+  // Idempotent with no partner.
+  await call("unpairPartner", C);
 });
 
 console.log(`\n${passed} passed`);

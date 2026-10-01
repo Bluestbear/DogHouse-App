@@ -926,13 +926,17 @@ class AuthService: ObservableObject {
     // MARK: - Un-pair
 
     func unpairFromPartner() async throws {
-        guard let myUid = Auth.auth().currentUser?.uid,
+        guard Auth.auth().currentUser != nil,
               let partnerId = userProfile?.partnerId,
               partnerId != "skipped" else { return }
 
-        // Only clear our own partnerId. The partner's listener will detect that
-        // our partnerId no longer points to them and will clear their own automatically.
-        try await fs.usersCollection.document(myUid).updateData(["partnerId": FieldValue.delete()])
+        // The server clears both halves in one transaction and retires both
+        // pairing codes, so neither of us can re-pair with the code the
+        // other handed over while we were together. Earlier builds cleared
+        // only their own partnerId; the onUserPaired trigger still finishes
+        // that for them. Our new code arrives on the private-document
+        // listener.
+        try await CloudFunctions.shared.call("unpairPartner")
 
         partnerDocListener?.remove()
         partnerProfile = nil

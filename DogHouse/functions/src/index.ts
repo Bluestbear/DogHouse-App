@@ -12,6 +12,7 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onCall, onRequest, HttpsError, CallableRequest } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import * as nodemailer from "nodemailer";
+import { randomInt } from "node:crypto";
 import { pickNudge, preflight, NudgeMarkers, ActiveEvent } from "./nudges";
 import {
   FREE_GAMES_PER_DAY, LEGACY_SUBSCRIPTION_PRODUCTS, dayKey, gameDayCount, isCouplePremium,
@@ -213,6 +214,12 @@ async function once<T extends Record<string, unknown>>(
 ): Promise<T> {
   // No key (older client) — run unguarded rather than reject.
   if (typeof key !== "string" || !key) return operation();
+  // The key becomes a document id, so it is bounded: the client sends a
+  // UUID (36 chars), and an arbitrary string here would let one account
+  // grow the collection with oversized documents faster than cleanup prunes.
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(key)) {
+    throw new HttpsError("invalid-argument", "Bad idempotency key.");
+  }
 
   const ref = db.collection("idempotencyKeys").doc(`${uid}_${key}`);
   try {
@@ -452,8 +459,11 @@ export const onDoghouseEvent = onDocumentWritten(
 // ─────────────────────────────────────────────────────────────
 // 1b. Un-pairing. Pairing itself goes through the pairWithCode callable,
 //     which checks the code and links both halves atomically; the rules
-//     only let a client clear its own partnerId (or skip). This trigger
-//     dissolves the old couple's friendships when that happens.
+//     only let a client clear its own partnerId (or skip). Un-pairing goes
+//     through unpairPartner, which clears both halves and retires both
+//     pairing codes. This trigger dissolves the old couple's friendships
+//     when either happens, and finishes the job for a build that still
+//     clears its own partnerId directly.
 // ─────────────────────────────────────────────────────────────
 export const onUserPaired = onDocumentUpdated(
   { document: "users/{uid}", region: REGION },
@@ -471,9 +481,106 @@ export const onUserPaired = onDocumentUpdated(
     const oldPartnerId = before?.partnerId as string | undefined;
     if (oldPartnerId && oldPartnerId !== "skipped" && oldPartnerId !== newPartnerId) {
       await dissolveCoupleFriendships(coupleKeyOf(uid, oldPartnerId));
+      await finishDirectSplit(uid, oldPartnerId);
     }
   }
 );
+
+// Mirrors AuthService.generatePartnerCode: no O/0/I/1.
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function randomPairingCode(): string {
+  let code = "";
+  for (let i = 0; i < 6; i++) code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
+  return code;
+}
+
+/**
+ * Issue this account a fresh pairing code and retire the old one.
+ *
+ * A code is a bearer proof of consent to pair, and it used to be issued once
+ * for life. After a break-up the ex still knows it, so with nothing else in
+ * the way they could call pairWithCode and restore the relationship — and
+ * with it the couple documents — against the other person's wishes. The
+ * new code reaches the owner through their private-document listener, and
+ * the one on the public profile (legacy accounts only) goes too, or the
+ * client's one-time migration would copy the retired code back over this.
+ */
+async function rotatePairingCode(uid: string): Promise<string | undefined> {
+  const userRef = db.collection("users").doc(uid);
+  const [userSnap, privSnap] = await Promise.all([userRef.get(), privateDataRef(uid).get()]);
+  if (!userSnap.exists) return undefined;
+  const legacy = userSnap.data()?.partnerCode as string | undefined;
+  const old = (privSnap.data()?.partnerCode as string | undefined) ?? legacy;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = randomPairingCode();
+    if (code === old) continue;
+    const batch = db.batch();
+    // create() makes the whole batch fail if the code is already taken.
+    batch.create(db.collection("partnerCodes").doc(code), { userId: uid });
+    batch.set(privateDataRef(uid), { partnerCode: code }, { merge: true });
+    if (legacy) batch.update(userRef, { partnerCode: FieldValue.delete() });
+    if (old) batch.delete(db.collection("partnerCodes").doc(old));
+    try {
+      await batch.commit();
+      return code;
+    } catch (err) {
+      logger.warn(`[pairing] Code collision while rotating ${uid} (attempt ${attempt + 1})`, err);
+    }
+  }
+  throw new HttpsError("internal", "Could not issue a new pairing code.");
+}
+
+/**
+ * The fallback for a build that un-pairs by clearing its own partnerId
+ * directly (1.1 (6) and earlier). That write leaves the other half still
+ * pointing at an ex — and isMyCoupleKey trusts one's own partnerId, so the
+ * ex keeps reading the couple's tasks, anniversary, achievements and game
+ * stats — and leaves both pairing codes valid. unpairPartner does all of
+ * this itself; when it ran, the other half no longer points back and there
+ * is nothing to do. Account deletion also clears the survivor's pointer:
+ * that flow retires the deleted account's code itself, and the survivor's
+ * code is safe, since the only person who knew it is gone.
+ */
+async function finishDirectSplit(uid: string, exId: string): Promise<void> {
+  if ((await db.collection("deletionRequests").doc(exId).get()).exists) return;
+  const exRef = db.collection("users").doc(exId);
+  const cleared = await db.runTransaction(async (tx) => {
+    const ex = await tx.get(exRef);
+    if (!ex.exists || ex.data()?.partnerId !== uid) return false;
+    tx.update(exRef, { partnerId: FieldValue.delete() });
+    return true;
+  });
+  if (!cleared) return;
+  await Promise.all([rotatePairingCode(uid), rotatePairingCode(exId)]);
+  logger.info(`[pairing] ${uid} unpaired directly; cleared ${exId} and rotated both codes`);
+}
+
+/**
+ * End the relationship: both partnerIds are cleared in one transaction (so
+ * neither half is left pointing at an ex) and both pairing codes are
+ * retired, so neither person can re-pair with a code the other handed
+ * over while they were together. Idempotent: with no partner it is a no-op.
+ */
+export const unpairPartner = onCall({ region: REGION }, async (req) => {
+  const uid = requireAuth(req);
+  const meRef = db.collection("users").doc(uid);
+  const partnerId = await db.runTransaction(async (tx) => {
+    const me = (await tx.get(meRef)).data();
+    const pid = me?.partnerId as string | undefined;
+    if (!pid || pid === "skipped") return undefined;
+    const partnerRef = db.collection("users").doc(pid);
+    const partner = (await tx.get(partnerRef)).data();
+    tx.update(meRef, { partnerId: FieldValue.delete() });
+    if (partner?.partnerId === uid) tx.update(partnerRef, { partnerId: FieldValue.delete() });
+    return pid;
+  });
+  if (!partnerId) return { ok: true };
+
+  await Promise.all([rotatePairingCode(uid), rotatePairingCode(partnerId)]);
+  logger.info(`[pairing] ${uid} unpaired from ${partnerId}; both codes rotated`);
+  return { ok: true };
+});
 
 /**
  * Pair with the owner of a pairing code. The code is the proof of consent:
@@ -487,6 +594,7 @@ export const pairWithCode = onCall({ region: REGION }, async (req) => {
   if (!/^[A-Z0-9]{6}$/.test(code)) {
     throw new HttpsError("invalid-argument", "Invalid partner code");
   }
+  await requireCodeAttempt(uid);
 
   const partnerUid = (await db.collection("partnerCodes").doc(code).get())
     .data()?.userId as string | undefined;
@@ -946,20 +1054,50 @@ const EMAIL_QUOTA_PER_HOUR = 10;
  */
 async function withinEmailQuota(uid: string | undefined): Promise<boolean> {
   if (!uid) return false;
-  const ref = db.collection("emailQuota").doc(uid);
+  return countInWindow(db.collection("emailQuota").doc(uid), { uid }, EMAIL_QUOTA_PER_HOUR, 3_600_000);
+}
+
+/**
+ * Fixed-window counter: true while this window has room for one more. The
+ * doc is created on the first hit of a window and overwritten when the
+ * window has elapsed, so nothing has to be reset by a scheduler.
+ */
+async function countInWindow(
+  ref: FirebaseFirestore.DocumentReference,
+  tag: Record<string, unknown>,
+  limit: number,
+  windowMs: number
+): Promise<boolean> {
   return db.runTransaction(async (tx) => {
     const q = (await tx.get(ref)).data();
     const now = Date.now();
     const windowStart = (q?.windowStart as Timestamp | undefined)?.toMillis() ?? 0;
-    if (now - windowStart >= 3_600_000) {
-      tx.set(ref, { windowStart: Timestamp.fromMillis(now), count: 1 });
+    if (now - windowStart >= windowMs) {
+      tx.set(ref, { ...tag, windowStart: Timestamp.fromMillis(now), count: 1 });
       return true;
     }
     const count = (q?.count as number | undefined) ?? 0;
-    if (count >= EMAIL_QUOTA_PER_HOUR) return false;
+    if (count >= limit) return false;
     tx.update(ref, { count: count + 1 });
     return true;
   });
+}
+
+const CODE_ATTEMPTS_PER_HOUR = 10;
+
+/**
+ * Pairing and couple codes are six characters from a 32-letter alphabet:
+ * about a billion, which is plenty against a person typing but not against
+ * a script, since every call answers "wrong code" or "found". Each account
+ * gets a handful of guesses an hour; a real user needs one or two.
+ * rateLimits/{kind}_{uid} is server-only (no rule matches it) and is
+ * removed with the account.
+ */
+async function requireCodeAttempt(uid: string): Promise<void> {
+  const ok = await countInWindow(
+    db.collection("rateLimits").doc(`code_${uid}`), { uid, kind: "code" },
+    CODE_ATTEMPTS_PER_HOUR, 3_600_000);
+  if (!ok) throw new HttpsError("resource-exhausted", "Too many attempts. Try again in an hour.");
 }
 
 export const onFeedbackCreated = onDocumentCreated(
@@ -998,8 +1136,14 @@ export const onFeedbackCreated = onDocumentCreated(
 // 8. Account deletion — client writes deletionRequests/{uid};
 //    this function wipes all their data and the Auth account.
 // ─────────────────────────────────────────────────────────────
+// `retry: true`: a failed attempt (a transient Firestore error halfway
+// through) used to be logged and forgotten, with the request marker left in
+// place — so the create-only rule stopped the user from asking again, and
+// their data stayed where it was. Now the error is rethrown and the platform
+// re-delivers the event with backoff. Every step below is safe to repeat:
+// deletes of missing documents succeed, queries that find nothing do nothing.
 export const onDeletionRequest = onDocumentCreated(
-  { document: "deletionRequests/{uid}", region: REGION },
+  { document: "deletionRequests/{uid}", region: REGION, retry: true },
   async (event) => {
     const uid = event.params.uid;
     logger.info(`[deleteAccount] Processing deletion for ${uid}`);
@@ -1049,6 +1193,9 @@ export const onDeletionRequest = onDocumentCreated(
       await deleteWhere("reports", "reporterId", uid);
       await db.collection("blocks").doc(uid).delete();
       await db.collection("emailQuota").doc(uid).delete();
+      await deleteWhere("rateLimits", "uid", uid);
+      await deleteWhere("sessions", "userId", uid);
+      await deleteWhere("idempotencyKeys", "uid", uid);
       // Challenges, with the hidden answer a Play-tab game keeps in its
       // private subcollection (deleting a parent does not delete it).
       const challenges = await db.collection("challenges")
@@ -1079,7 +1226,9 @@ export const onDeletionRequest = onDocumentCreated(
           db.collection("onboardingTasks").doc(key).delete(),
           db.collection("gameStats").doc(key).delete(),
           db.collection("taskRenegotiation").doc(key).delete(),
+          db.collection("achievements").doc(key).delete(),
         ]);
+        await deleteWhere("friendRemovals", "removedBy", key);
       }
 
       // Subcollections are NOT removed when the parent document is deleted.
@@ -1102,7 +1251,8 @@ export const onDeletionRequest = onDocumentCreated(
       await event.data?.ref.delete();
       logger.info(`[deleteAccount] Completed deletion for ${uid}`);
     } catch (err) {
-      logger.error(`[deleteAccount] Failed for ${uid}:`, err);
+      logger.error(`[deleteAccount] Failed for ${uid}, will retry:`, err);
+      throw err;
     }
   }
 );
@@ -1117,6 +1267,21 @@ export const onDeletionRequest = onDocumentCreated(
  * (deterministic id, created by its winner — see ChallengeService). Quizzes
  * never pay. The caller separately checks that the couple is mutual.
  */
+/**
+ * Whether today is the couple's anniversary (month and day). Compared in
+ * UTC with a day's tolerance either side: the date is stored as local
+ * midnight and the claim is made in local time, so either can sit on the
+ * neighbouring UTC day. Mirrors isAnniversaryDay in firestore.rules.
+ */
+function isAnniversaryDay(anniversary: Timestamp | undefined, now = Date.now()): boolean {
+  if (!anniversary) return false;
+  const a = anniversary.toDate();
+  return [-1, 0, 1].some((d) => {
+    const t = new Date(now + d * 86_400_000);
+    return t.getUTCMonth() === a.getUTCMonth() && t.getUTCDate() === a.getUTCDate();
+  });
+}
+
 function earnsCard(id: string, c: FirebaseFirestore.DocumentData): boolean {
   const participants = c.participants as unknown;
   if (!Array.isArray(participants) || participants.length !== 2) return false;
@@ -1126,7 +1291,10 @@ function earnsCard(id: string, c: FirebaseFirestore.DocumentData): boolean {
   const key = coupleKeyOf(a, b);
   if (c.coupleKey !== key) return false;
 
-  if (c.type === "photo") return c.createdBy === "system";
+  // A dash is won by sending a photo; a claim with none is just a tap.
+  if (c.type === "photo") {
+    return c.createdBy === "system" && typeof c.photoData === "string" && c.photoData.length > 0;
+  }
   if (c.type === "anniversary") {
     const year = new Date().getUTCFullYear();
     return c.createdBy === c.winnerId &&
@@ -1186,11 +1354,20 @@ export const onChallengeWritten = onDocumentWritten(
           return false;
         }
         const [a, b] = c.participants as string[];
-        const [aSnap, bSnap] = await Promise.all([
+        const key = coupleKeyOf(a, b);
+        const [aSnap, bSnap, metaSnap] = await Promise.all([
           tx.get(db.collection("users").doc(a)),
           tx.get(db.collection("users").doc(b)),
+          tx.get(db.collection("coupleMeta").doc(key)),
         ]);
         if (aSnap.data()?.partnerId !== b || bSnap.data()?.partnerId !== a) return false;
+        // The race is only on on the day itself. The id carries the year and
+        // the rule checks that, but nothing else stopped a partner from
+        // "wishing" in January and pocketing the year's card.
+        if (c.type === "anniversary" &&
+            !isAnniversaryDay(metaSnap.data()?.anniversary as Timestamp | undefined)) {
+          return false;
+        }
         tx.update(ref, { cardAwarded: true });
         tx.update(db.collection("users").doc(winnerId), {
           wishCards: FieldValue.increment(1),
@@ -2328,15 +2505,60 @@ async function unshareFeedPosts(keyA: string, keyB: string): Promise<void> {
 }
 
 /**
+ * Rebuild the audience of every active jailbreak vote one of `dogs` sits
+ * in. A vote's audience is frozen at creation, like a post's, so a couple
+ * removed or blocked afterwards kept reading it and casting — the rules
+ * only ask "is the voter in audienceIds". Rebuilding from the current
+ * friendships (rather than just removing the severed couple) keeps a
+ * couple that is still befriended through the vote's other dog.
+ */
+async function refreshVoteAudiences(dogs: string[]): Promise<void> {
+  const seen = new Set<string>();
+  for (const dog of dogs) {
+    // One array-contains filter and a status check in code: adding
+    // `status ==` to the query would need a composite index.
+    const votes = await db.collection("voteEvents")
+      .where("doghousedUserIds", "array-contains", dog).get();
+    for (const v of votes.docs) {
+      if (v.data().status !== "active" || seen.has(v.id)) continue;
+      seen.add(v.id);
+      const audience = new Set<string>();
+      for (const d of (v.data().doghousedUserIds ?? []) as string[]) {
+        const partnerId = (await db.collection("users").doc(d).get()).data()?.partnerId as
+          string | undefined;
+        if (!partnerId || partnerId === "skipped") {
+          audience.add(d);
+          continue;
+        }
+        (await audienceForCouple(d, partnerId)).forEach((m) => audience.add(m));
+      }
+      await v.ref.update({ audienceIds: [...audience] });
+    }
+  }
+}
+
+/** Everything that stops two couples seeing each other once they part. */
+async function severCouples(keyA: string, keyB: string): Promise<void> {
+  await unshareFeedPosts(keyA, keyB);
+  await refreshVoteAudiences([...keyA.split("_"), ...keyB.split("_")]);
+}
+
+/**
  * A couple that splits takes its friendships with it: a link names the old
  * pair in memberIds/coupleKeys, and neither ex-partner can display a couple
- * they are no longer half of.
+ * they are no longer half of. Each former friend couple also stops seeing
+ * the split couple's old sendings and votes, exactly as if they had been
+ * removed — the link going away alone did not touch those.
  */
 async function dissolveCoupleFriendships(coupleKey: string): Promise<void> {
   const links = await db.collection("coupleFriendships")
     .where("coupleKeys", "array-contains", coupleKey).get();
   if (links.empty) return;
-  await Promise.all(links.docs.map((d) => d.ref.delete()));
+  await Promise.all(links.docs.map(async (d) => {
+    await d.ref.delete();
+    const other = ((d.data().coupleKeys ?? []) as string[]).find((k) => k !== coupleKey);
+    if (other) await severCouples(coupleKey, other);
+  }));
   logger.info(`[friends] Dissolved ${links.size} friendship(s) of split couple ${coupleKey}`);
 }
 
@@ -2350,6 +2572,7 @@ export const addCoupleFriend = onCall({ region: REGION }, async (req) => {
   if (!myPartner || myPartner === "skipped") {
     throw new HttpsError("failed-precondition", "Pair with your partner first.");
   }
+  await requireCodeAttempt(uid);
 
   // Resolve the code → a user, then their partner
   const codeDoc = await db.collection("partnerCodes").doc(code).get();
@@ -2384,12 +2607,24 @@ export const addCoupleFriend = onCall({ region: REGION }, async (req) => {
     throw new HttpsError("permission-denied", "That couple can't be added.");
   }
 
+  // A removal sticks: the removed couple still holds the same code, so
+  // without this they could add themselves straight back. Only the couple
+  // that removed can re-add, which clears the mark. Same message as a
+  // block, so the caller learns nothing about which it was.
   const docId = friendshipIdFor(myKey, themKey);
-  await db.collection("coupleFriendships").doc(docId).set({
+  const removal = await db.collection("friendRemovals").doc(docId).get();
+  if (removal.exists && removal.data()?.removedBy !== myKey) {
+    throw new HttpsError("permission-denied", "That couple can't be added.");
+  }
+
+  const batch = db.batch();
+  batch.set(db.collection("coupleFriendships").doc(docId), {
     coupleKeys: [myKey, themKey],
     memberIds: [uid, myPartner, themId, themPartner],
     createdAt: Timestamp.now(),
   });
+  batch.delete(removal.ref);
+  await batch.commit();
 
   const myName = me?.displayName ?? "A couple";
   await notifyUsers([themId, themPartner], "💞 New couple friend!",
@@ -2408,8 +2643,15 @@ export const removeCoupleFriend = onCall({ region: REGION }, async (req) => {
   const docId = friendshipIdFor(myKey, otherKey);
   const snap = await db.collection("coupleFriendships").doc(docId).get();
   if (snap.exists && (snap.data()?.memberIds ?? []).includes(uid)) {
-    await snap.ref.delete();
-    await unshareFeedPosts(myKey, otherKey);
+    const batch = db.batch();
+    batch.delete(snap.ref);
+    // Remembered so the other couple cannot re-add with the unchanged code;
+    // see addCoupleFriend. Server-only: no rule matches friendRemovals.
+    batch.set(db.collection("friendRemovals").doc(docId), {
+      removedBy: myKey, coupleKeys: [myKey, otherKey], removedAt: Timestamp.now(),
+    });
+    await batch.commit();
+    await severCouples(myKey, otherKey);
   }
   return { ok: true };
 });
@@ -2503,7 +2745,7 @@ export const blockUser = onCall({ region: REGION }, async (req) => {
         .doc(friendshipIdFor(myKey, themKey)).get();
       if (link.exists) {
         await link.ref.delete();
-        await unshareFeedPosts(myKey, themKey);
+        await severCouples(myKey, themKey);
       }
     }
   }
@@ -2539,30 +2781,38 @@ export const backfillPrivateUserData = onSchedule(
     const BATCH = 200;
     let migrated = 0;
 
+    // Several pages per run: every unmigrated profile is readable by any
+    // signed-in account until its turn comes, so one page a day was a
+    // needlessly long exposure. Migrated documents drop out of the
+    // orderBy(field) query, so the next page needs no cursor.
     for (const field of ["partnerCode", "fcmToken"]) {
-      const snap = await db
-        .collection("users")
-        .orderBy(field)
-        .limit(BATCH)
-        .get();
+      for (let page = 0; page < 10; page++) {
+        const snap = await db
+          .collection("users")
+          .orderBy(field)
+          .limit(BATCH)
+          .get();
+        if (snap.empty) break;
 
-      for (const doc of snap.docs) {
-        const data = doc.data();
-        const priv: Record<string, unknown> = {};
-        if (data.partnerCode) priv.partnerCode = data.partnerCode;
-        if (data.fcmToken) priv.fcmToken = data.fcmToken;
-        if (Object.keys(priv).length === 0) continue;
+        for (const doc of snap.docs) {
+          const data = doc.data();
+          const priv: Record<string, unknown> = {};
+          if (data.partnerCode) priv.partnerCode = data.partnerCode;
+          if (data.fcmToken) priv.fcmToken = data.fcmToken;
+          if (Object.keys(priv).length === 0) continue;
 
-        try {
-          await privateDataRef(doc.id).set(priv, { merge: true });
-          await doc.ref.update({
-            partnerCode: FieldValue.delete(),
-            fcmToken: FieldValue.delete(),
-          });
-          migrated += 1;
-        } catch (err) {
-          logger.error(`[backfill] Failed for ${doc.id}:`, err);
+          try {
+            await privateDataRef(doc.id).set(priv, { merge: true });
+            await doc.ref.update({
+              partnerCode: FieldValue.delete(),
+              fcmToken: FieldValue.delete(),
+            });
+            migrated += 1;
+          } catch (err) {
+            logger.error(`[backfill] Failed for ${doc.id}:`, err);
+          }
         }
+        if (snap.size < BATCH) break;
       }
     }
 

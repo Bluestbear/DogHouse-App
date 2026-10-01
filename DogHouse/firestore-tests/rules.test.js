@@ -19,7 +19,7 @@ import {
 } from "@firebase/rules-unit-testing";
 import {
   doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, deleteField,
-  query, where,
+  query, where, serverTimestamp,
 } from "firebase/firestore";
 import { beforeAll, afterAll, beforeEach, describe, test } from "vitest";
 
@@ -233,8 +233,9 @@ describe("partnerCodes", () => {
     });
   });
 
-  test("a code can be looked up by id (pairing in 1.1 (5))", async () => {
-    await assertSucceeds(getDoc(doc(as(MALLORY), "partnerCodes", "ABC123")));
+  test("a code cannot be looked up by id (that was an unlimited guessing oracle)", async () => {
+    await assertFails(getDoc(doc(as(MALLORY), "partnerCodes", "ABC123")));
+    await assertFails(getDoc(doc(as(ALICE), "partnerCodes", "ABC123")));
   });
 
   test("NOBODY can list the codes — that is every code plus its uid", async () => {
@@ -665,6 +666,10 @@ describe("challenges", () => {
         coupleKey: COUPLE_KEY, type: "quiz", participants: [ALICE, BOB],
         status: "active", createdBy: ALICE, answers: { [ALICE]: { own: "Italy" } },
       });
+      // Today is the anniversary, so the race below is on.
+      await setDoc(doc(ctx.firestore(), "coupleMeta", COUPLE_KEY), {
+        userIds: [ALICE, BOB], anniversary: new Date(),
+      });
     });
   });
 
@@ -705,6 +710,22 @@ describe("challenges", () => {
   test("first tap creates the anniversary race; an outsider cannot", async () => {
     await assertFails(setDoc(doc(as(MALLORY), "challenges", "anniv_x"),
       { ...race, createdBy: MALLORY }));
+    await assertSucceeds(setDoc(doc(as(ALICE), "challenges", `anniv_${COUPLE_KEY}_${YEAR}`), race));
+  });
+
+  test("the race is only on on the anniversary itself", async () => {
+    const setAnniversary = (anniversary) => testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "coupleMeta", COUPLE_KEY), { userIds: [ALICE, BOB], anniversary });
+    });
+    await setAnniversary(new Date(Date.now() + 40 * 86_400_000));
+    await assertFails(setDoc(doc(as(ALICE), "challenges", `anniv_${COUPLE_KEY}_${YEAR}`), race));
+    // No anniversary set at all.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await deleteDoc(doc(ctx.firestore(), "coupleMeta", COUPLE_KEY));
+    });
+    await assertFails(setDoc(doc(as(ALICE), "challenges", `anniv_${COUPLE_KEY}_${YEAR}`), race));
+    // Stored as local midnight: a day either side still counts as today.
+    await setAnniversary(new Date(Date.now() - 20 * 3_600_000));
     await assertSucceeds(setDoc(doc(as(ALICE), "challenges", `anniv_${COUPLE_KEY}_${YEAR}`), race));
   });
 
@@ -769,6 +790,10 @@ describe("challenges", () => {
       });
     });
     const claim = { status: "completed", photoData: "aGVsbG8=", completedAt: new Date() };
+    // No photo, no win: a bare "completed, I won" used to take the card.
+    await assertFails(updateDoc(doc(as(BOB), "challenges", "dash1"),
+      { status: "completed", winnerId: BOB, completedAt: new Date() }));
+    await assertFails(updateDoc(doc(as(BOB), "challenges", "dash1"), { ...claim, winnerId: BOB, photoData: "" }));
     await assertFails(updateDoc(doc(as(BOB), "challenges", "dash1"), { ...claim, winnerId: ALICE }));
     await assertFails(updateDoc(doc(as(BOB), "challenges", "dash1"),
       { ...claim, winnerId: BOB, cardAwarded: true }));
@@ -982,6 +1007,18 @@ describe("server-only collections", () => {
       { fromUserId: ALICE, text: "hi", attachment: "x".repeat(500000) }));
     await assertFails(setDoc(doc(as(ALICE), "feedback", "f2"),
       { fromUserId: BOB, text: "impersonated" }));
+  });
+
+  test("a session row is the exact shape AuthService writes, stamped by the server", async () => {
+    const row = { userId: ALICE, at: serverTimestamp(), appVersion: "1.1", platform: "ios" };
+    await assertSucceeds(setDoc(doc(as(ALICE), "sessions", "s1"), row));
+    await assertFails(setDoc(doc(as(ALICE), "sessions", "s2"), { ...row, userId: BOB }));
+    // A client-chosen time would never age out of cleanupSessions.
+    await assertFails(setDoc(doc(as(ALICE), "sessions", "s3"), { ...row, at: new Date(2099, 0, 1) }));
+    await assertFails(setDoc(doc(as(ALICE), "sessions", "s4"), { userId: ALICE, appVersion: "1.1", platform: "ios" }));
+    await assertFails(setDoc(doc(as(ALICE), "sessions", "s5"), { ...row, padding: "x".repeat(10000) }));
+    await assertFails(setDoc(doc(as(ALICE), "sessions", "s6"), { ...row, appVersion: "x".repeat(33) }));
+    await assertFails(getDoc(doc(as(ALICE), "sessions", "s1")));
   });
 
   test("nothing in the database may be deleted by a client", async () => {

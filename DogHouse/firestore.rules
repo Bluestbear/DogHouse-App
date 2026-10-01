@@ -127,22 +127,25 @@ service cloud.firestore {
     match /users/{userId}/private/{docId} {
       allow read: if authed() && request.auth.uid == userId;
       allow create: if authed() && request.auth.uid == userId;
-      // partnerCode is issued once at sign-up and is immutable thereafter;
-      // it is the key other users pair against.
+      // partnerCode is the key other users pair against. Clients never
+      // change it; the server reissues it when a couple splits.
       allow update: if authed()
         && request.auth.uid == userId
         && (!('partnerCode' in resource.data)
             || request.resource.data.get('partnerCode', null) == resource.data.partnerCode);
     }
 
-    // A code can be looked up one at a time by anyone signed in (builds up
-    // to 1.1 (5) resolve it client-side; later builds use pairWithCode and
-    // never read here). `list` is denied: `allow read` used to include it,
-    // and a collection query handed out every code and the uid behind it.
-    // Create-only, and only for your own uid — codes never change.
+    // Never readable by clients. pairWithCode and addCoupleFriend resolve a
+    // code server-side (and are rate limited there); `allow get` used to
+    // serve builds up to 1.1 (5), which paired client-side — those builds
+    // can no longer pair at all (see the partnerId clause above), and a
+    // single-document get was a free oracle for guessing codes at Firestore
+    // speed with no attempt limit. `list` was worse: a collection query
+    // handed out every code and the uid behind it.
+    // Create-only, and only for your own uid. The server rotates a code
+    // when a couple splits (unpairPartner); clients never change one.
     match /partnerCodes/{code} {
-      allow get: if authed();
-      allow list: if false;
+      allow read: if false;
       allow create: if authed() && request.resource.data.userId == request.auth.uid;
     }
 
@@ -404,7 +407,26 @@ service cloud.firestore {
         && !d.keys().hasAny(['answers'])
         && challengeId in [
              prefix + string((request.time - duration.value(14, 'h')).year()),
-             prefix + string((request.time + duration.value(14, 'h')).year())];
+             prefix + string((request.time + duration.value(14, 'h')).year())]
+        && isAnniversaryDay(d.coupleKey);
+    }
+
+    // The race is only on on the anniversary itself: the id pins the year,
+    // but without this a partner could "wish" in January and pocket the
+    // year's card. Month and day, with a day's tolerance either side — the
+    // date is stored as local midnight and the tap is made in local time,
+    // so either can land on the neighbouring UTC day. No coupleMeta (no
+    // anniversary set) denies. Mirrors isAnniversaryDay in functions.
+    function isAnniversaryDay(coupleKey) {
+      let a = get(/databases/$(database)/documents/coupleMeta/$(coupleKey))
+                .data.get('anniversary', null);
+      let early = request.time - duration.value(24, 'h');
+      let late = request.time + duration.value(24, 'h');
+      return a != null
+        && a is timestamp
+        && ((a.month() == request.time.month() && a.day() == request.time.day())
+            || (a.month() == early.month() && a.day() == early.day())
+            || (a.month() == late.month() && a.day() == late.day()));
     }
 
     function quizAnswer() {
@@ -416,6 +438,8 @@ service cloud.firestore {
 
     // First photo in wins; the claim names its sender as winner. Photo
     // dashes themselves are created only by the randomPhotoDash scheduler.
+    // A claim must carry a photo: with `photoData` optional, a bare
+    // "completed, I won" tap took the card without sending anything.
     function photoClaim() {
       let d = request.resource.data;
       return resource.data.type == 'photo'
@@ -423,8 +447,10 @@ service cloud.firestore {
              .hasOnly(['status', 'winnerId', 'photoData', 'completedAt'])
         && d.status == 'completed'
         && d.winnerId == request.auth.uid
-        && d.get('photoData', '') is string
-        && d.get('photoData', '').size() <= 400000;
+        && 'photoData' in d
+        && d.photoData is string
+        && d.photoData.size() > 0
+        && d.photoData.size() <= 400000;
     }
 
     // Redeemed "Whatever I Want" cards. Creation is SERVER-ONLY (the
@@ -457,10 +483,21 @@ service cloud.firestore {
     // a per-user activity trail, so exposing it would be exactly the kind of
     // cross-user enumeration `allow list: if false` on /users exists to stop.
     // Read it from the Firebase console; cleanupSessions prunes it.
+    //
+    // The shape is pinned: `at` must be the server time, because
+    // cleanupSessions prunes on it and a row with a missing or far-future
+    // `at` would never age out — and a bounded row keeps one account from
+    // padding the collection with oversized documents.
     match /sessions/{sessionId} {
       allow read, update, delete: if false;
       allow create: if authed()
-        && request.resource.data.userId == request.auth.uid;
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.keys().hasOnly(['userId', 'at', 'appVersion', 'platform'])
+        && request.resource.data.at == request.time
+        && request.resource.data.get('appVersion', '') is string
+        && request.resource.data.get('appVersion', '').size() <= 32
+        && request.resource.data.get('platform', '') is string
+        && request.resource.data.get('platform', '').size() <= 16;
     }
 
     // Belly rubs — doc id is the receiver's uid. The receiver reads
